@@ -235,7 +235,9 @@
     return {
       kind: 'farm', id: id, key: key, farm: farm, token: token,
       decimals: live.decimals != null ? live.decimals : (token.decimals == null ? 18 : token.decimals),
-      totalStaked: live.totalStaked, userAmount: live.userAmount, pending: live.pending,
+      totalStaked: live.totalStaked, allocPoint: live.allocPoint,
+      forgePerSec: live.forgePerSec, totalAllocPoint: live.totalAllocPoint,
+      userAmount: live.userAmount, pending: live.pending,
       balance: live.balance, allowance: live.allowance, fee: live.fee != null ? live.fee : Number(farm.depositFeeBP || 0),
       error: live.error || ''
     };
@@ -254,6 +256,22 @@
       balance: live.balance, allowance: live.allowance, fee: 0, error: live.error || '' };
   }
 
+  function annualRewardRate(model) {
+    if (model.kind !== 'farm' || model.totalStaked == null || model.allocPoint == null ||
+        model.forgePerSec == null || model.totalAllocPoint == null) return '—';
+    try {
+      var totalStaked = BigInt(model.totalStaked);
+      var allocPoint = BigInt(model.allocPoint);
+      var totalAllocPoint = BigInt(model.totalAllocPoint);
+      var forgePerSec = BigInt(model.forgePerSec);
+      if (totalStaked === 0n) return 'Awaiting stake';
+      if (allocPoint === 0n || totalAllocPoint === 0n || forgePerSec === 0n) return '0';
+      var tokenScale = 10n ** BigInt(model.decimals);
+      var rate = (forgePerSec * allocPoint * 31536000n * tokenScale) / (totalAllocPoint * totalStaked);
+      return units(rate, 18, 4);
+    } catch (_) { return '—'; }
+  }
+
   function card(model) {
     var isVault = model.kind === 'vault';
     var rewardSymbol = isVault ? model.rewardToken.symbol : (C.tokenSymbol || 'FORGE');
@@ -264,11 +282,14 @@
     var badge = isVault ? 'Vault' : (Number(model.fee) ? (Number(model.fee) / 100) + '% deposit fee' : 'No deposit fee');
     var mode = state.account && model.userAmount > 0n ? 'withdraw' : 'stake';
     var idAttr = ' data-kind="' + esc(model.kind) + '" data-key="' + esc(model.id) + '"';
-    return '<article class="pool-card">' +
+    var rate = annualRewardRate(model);
+    var rateTitle = 'Estimated annual FORGE rewards per one staked token, using current on-chain emissions, pool allocation and total stake. Assumes these values continue; this is not a USD APR.';
+    return '<article class="pool-card' + (isVault ? '' : ' has-rate') + '">' +
       '<div class="asset-cell">' + icon(model.key) + '<div class="token-copy"><div class="token-symbol">' + esc(model.token.symbol) + ' <span class="' + badgeClass + '">' + esc(badge) + '</span></div><div class="token-name">' + esc(model.token.name) + (isVault ? ' · earns ' + esc(rewardSymbol) : '') + '</div></div></div>' +
+      (isVault ? '' : '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">Est. FORGE / token / yr</div><div class="metric-value">' + esc(rate) + '</div></div>') +
       '<div class="metric-col"><div class="metric-label">Total staked</div><div class="metric-value">' + esc(staked) + '</div></div>' +
-      '<div class="metric-col"><div class="metric-label">Your stake</div><div class="metric-value dim">' + esc(user) + '</div></div>' +
-      '<div class="metric-col"><div class="metric-label">' + (isVault ? 'Pending reward' : 'Pending FORGE') + '</div><div class="metric-value">' + esc(pending) + '</div></div>' +
+      '<div class="metric-col stake-position-col"><div class="metric-label">Your stake</div><div class="metric-value dim">' + esc(user) + '</div></div>' +
+      '<div class="metric-col pending-col"><div class="metric-label">' + (isVault ? 'Pending reward' : 'Pending FORGE') + '</div><div class="metric-value">' + esc(pending) + '</div></div>' +
       '<div class="card-actions">' +
       (state.account && model.pending > 0n ? '<button class="button compact ghost" data-action="harvest"' + idAttr + '>Claim</button>' : '') +
       (state.account && model.userAmount > 0n ? '<button class="button compact ghost" data-action="open-modal"' + idAttr + ' data-mode="withdraw">Withdraw</button>' : '') +
@@ -287,10 +308,11 @@
     var empty = !list.length ? '<div class="empty-state"><div class="empty-mark">' + (stock ? '▥' : '◈') + '</div><h2>' + (searchText ? 'No matching pools' : (stock ? 'No stock pools configured' : 'No token pools configured')) + '</h2><p>' + (searchText ? 'Try another token symbol or name.' : (stock ? 'This deployment has no stock-token pools configured. Once a pool is added to the public configuration and deployed on this chain, it will appear here.' : 'This deployment has no crypto-token pools configured beyond any pools shown in the current network configuration.')) + '</p>' + (stock ? '<a class="button compact ghost" href="/pools/">Browse token staking</a>' : '') + '</div>' : cards;
     var headers = stock ? 'Stake supported Robinhood stock tokens. Amounts are ERC-20 token units; stock multipliers do not change your deposited principal.' : 'Deposit a supported token to earn FORGE. Pool and fee details are checked against the configured contract.';
     var warning = stock ? 'Stock tokens use ERC-20 token units. This interface never converts your deposit to underlying share quantities.' : 'Deposit fees are shown before approval. Withdrawals do not incur a deposit fee.';
+    var rateNote = 'Estimated annual rates use current on-chain FORGE emissions, pool allocation and total stake. They assume these values continue, are denominated in FORGE per staked token, and are not USD APRs.';
     return '<main class="page">' + testnetStrip() + stateNotice() +
       '<div class="page-title-row"><div><div class="eyebrow">YieldForge · Robinhood Chain</div><h1>' + (stock ? 'Stock staking' : 'Token staking') + '</h1><p>' + headers + '</p></div><div class="page-title-actions">' +
       (hasPools ? '<input class="search" id="pool-search" type="search" value="' + esc(state.query) + '" placeholder="Search tokens" aria-label="Search tokens">' : '') + '</div></div>' +
-      '<div class="info-strip"><span class="info-icon">i</span><span>' + esc(warning) + '</span></div>' +
+      '<div class="info-strip"><span class="info-icon">i</span><span>' + esc(warning + ' ' + rateNote) + '</span></div>' +
       '<section class="pool-list" aria-label="' + (stock ? 'Stock staking pools' : 'Token staking pools') + '">' + (state.loading && !list.length ? '<div class="status-panel"><p>Reading configured pools from Robinhood Chain…</p></div>' : empty) + '</section>' + footer() + '</main>';
   }
 
@@ -433,13 +455,20 @@
       var stakeAddress = meta.address;
       if (!stakeAddress) throw new Error('Token contract address is missing.');
       var contract = new E.Contract(stakeAddress, ERC20_ABI, state.rpc);
-      var info = await state.chef.poolInfo(Number(farm.pid));
+      var liveValues = await Promise.all([
+        state.chef.poolInfo(Number(farm.pid)),
+        state.chef.forgePerSec(),
+        state.chef.totalAllocPoint()
+      ]);
+      var info = liveValues[0];
       if (String(info[0]).toLowerCase() !== stakeAddress.toLowerCase()) throw new Error('Stake-token address differs from the deployed pool.');
       var fee = Number(info[4]);
       if (farm.depositFeeBP != null && fee !== Number(farm.depositFeeBP)) throw new Error('Deposit fee differs from the public configuration.');
       var decimals = meta.decimals;
       if (decimals == null || !Number.isInteger(decimals) || decimals < 0 || decimals > 36) decimals = Number(await contract.decimals());
-      var model = { kind: 'farm', id: id, key: key, farm: farm, token: meta, decimals: decimals, totalStaked: info[5], fee: fee, userAmount: 0n, pending: 0n, balance: 0n, allowance: 0n };
+      var model = { kind: 'farm', id: id, key: key, farm: farm, token: meta, decimals: decimals,
+        totalStaked: info[5], allocPoint: info[1], forgePerSec: liveValues[1], totalAllocPoint: liveValues[2],
+        fee: fee, userAmount: 0n, pending: 0n, balance: 0n, allowance: 0n };
       if (state.account) {
         var results = await Promise.all([
           state.chef.userInfo(Number(farm.pid), state.account),

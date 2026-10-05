@@ -61,9 +61,15 @@ async function render(pathname) {
   const pools = await render('/pools/');
   assert.match(pools, /class="token-symbol">FORGE/);
   assert.doesNotMatch(pools, /class="token-symbol">AMD/);
+  const tokenRateIndex = pools.indexOf('metric-label">Est. FORGE / token / yr');
+  const tokenStakedIndex = pools.indexOf('metric-label">Total staked');
+  assert(tokenRateIndex >= 0 && tokenRateIndex < tokenStakedIndex, 'token-pool rate should appear before total staked');
   const stocks = await render('/stocks/');
   assert.match(stocks, /class="token-symbol">AMD/);
   assert.doesNotMatch(stocks, /class="token-symbol">FORGE/);
+  const stockRateIndex = stocks.indexOf('metric-label">Est. FORGE / token / yr');
+  const stockStakedIndex = stocks.indexOf('metric-label">Total staked');
+  assert(stockRateIndex >= 0 && stockRateIndex < stockStakedIndex, 'stock-pool rate should appear before total staked');
   console.log('PASS token and stock routes separate configured pool categories');
 })().catch(error => {
   console.error(error);
