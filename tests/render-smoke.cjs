@@ -61,7 +61,7 @@ async function testWalletPersistsAcrossNavigation() {
   };
   const exposedSource = source.replace(
     "  root.addEventListener('click', handleRootClick);",
-    "  window.__navigationTest = { state: state, handleRootClick: handleRootClick };\n  root.addEventListener('click', handleRootClick);"
+    "  window.__navigationTest = { state: state, handleRootClick: handleRootClick, render: render };\n  root.addEventListener('click', handleRootClick);"
   );
   assert.notEqual(exposedSource, source, 'navigation test hook should be installed');
   const context = { window, document, console, BigInt, Set, Number, String, Array, Object, Math, Intl, Promise, URL };
@@ -102,6 +102,27 @@ async function testWalletPersistsAcrossNavigation() {
   assert.equal(state.account, '0x1234567890abcdef1234567890abcdef12345678', 'history navigation should preserve the connected wallet');
   assert.equal(state.injected, provider);
   assert.equal(state.signer, signer);
+
+  state.route = 'home';
+  state.data = {
+    'farm:17': {
+      kind: 'farm', id: '17', token: { symbol: 'DOGE', name: 'Dogecoin' },
+      userAmount: 5n * 10n ** 18n, pending: 2n * 10n ** 18n, decimals: 18
+    }
+  };
+  window.__navigationTest.render();
+  let positionActions = app.innerHTML.slice(app.innerHTML.indexOf('class="position-actions"'));
+  const claimIndex = positionActions.indexOf('data-action="harvest"');
+  const withdrawIndex = positionActions.indexOf('data-mode="withdraw"');
+  assert(claimIndex >= 0 && claimIndex < withdrawIndex, 'home position should show Claim to the left of Withdraw');
+  assert.match(positionActions, /data-action="harvest" data-key="17">Claim<\/button>/, 'claim should target the position pool');
+  assert.match(positionActions, /data-mode="withdraw">Withdraw<\/button>/);
+
+  state.data['farm:17'].pending = 0n;
+  window.__navigationTest.render();
+  positionActions = app.innerHTML.slice(app.innerHTML.indexOf('class="position-actions"'));
+  assert.match(positionActions, /data-action="harvest" data-key="17" disabled title="No rewards available to claim">Claim<\/button>/, 'claim should be disabled when the position has no pending rewards');
+  console.log('PASS home positions provide a claim-only action before withdrawal');
   console.log('PASS client-side navigation and browser history preserve the connected wallet');
 }
 
@@ -215,10 +236,10 @@ async function testLiveHomeMetrics() {
   const memes = await render('/memes/');
   assert.match(memes, /class="token-symbol">DOGE/);
   assert.doesNotMatch(memes, /class="token-symbol">FORGE|class="token-symbol">AMD/);
-  assert.match(memes, /href="mailto:\?subject=Meme%20Token%20Pool%20Request&amp;body=Token%20Name%3A%20%0ATicker%3A%20%0AToken%20Contract%3A%20"/);
-  assert.match(memes, /Add your meme token here/);
+  assert.match(memes, /href="https:\/\/forms\.gle\/dTXMaBD8fVZmhuFAA" target="_blank" rel="noopener noreferrer">Add your meme token here/);
+  assert.doesNotMatch(memes, /href="mailto:/);
   assert.doesNotMatch(home, /href="\/staking\/"|>Vaults</);
-  console.log('PASS token, stock and meme routes separate pool categories and show the prefilled meme-request email');
+  console.log('PASS token, stock and meme routes separate pool categories and the meme request opens its Google Form in a new tab');
   await testWalletPersistsAcrossNavigation();
   await testLiveHomeMetrics();
 })().catch(error => {

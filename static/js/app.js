@@ -388,7 +388,8 @@
     if (state.account) {
       if (positions.length) {
         positionHtml = '<section class="panel position-panel"><div class="position-head"><h2>Your positions</h2><span>Across configured pools</span></div>' + positions.map(function (m) {
-          return '<div class="position-row"><div><strong>' + esc(m.token.symbol) + '</strong><div class="label">' + esc(m.token.name) + '</div></div><div><span class="label">Staked</span><br><strong>' + units(m.userAmount, m.decimals) + ' ' + esc(m.token.symbol) + '</strong></div><div><span class="label">Pending rewards</span><br><strong>' + units(m.pending, 18) + ' FORGE</strong></div><div class="position-actions"><button class="button compact ghost" data-action="open-modal" data-kind="farm" data-key="' + esc(m.id) + '" data-mode="withdraw">Withdraw</button></div></div>';
+          var hasPendingRewards = m.pending != null && m.pending > 0n;
+          return '<div class="position-row"><div><strong>' + esc(m.token.symbol) + '</strong><div class="label">' + esc(m.token.name) + '</div></div><div><span class="label">Staked</span><br><strong>' + units(m.userAmount, m.decimals) + ' ' + esc(m.token.symbol) + '</strong></div><div><span class="label">Pending rewards</span><br><strong>' + units(m.pending, 18) + ' FORGE</strong></div><div class="position-actions"><button class="button compact ghost" data-action="harvest" data-key="' + esc(m.id) + '"' + (hasPendingRewards ? '' : ' disabled title="No rewards available to claim"') + '>Claim</button><button class="button compact ghost" data-action="open-modal" data-kind="farm" data-key="' + esc(m.id) + '" data-mode="withdraw">Withdraw</button></div></div>';
         }).join('') + '</section>';
       } else {
         positionHtml = '<section class="panel position-panel"><div class="position-head"><h2>Your positions</h2><span>Wallet connected</span></div><p class="stat-foot">No active positions found in the configured pools.</p></section>';
