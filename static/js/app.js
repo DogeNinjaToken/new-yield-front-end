@@ -28,15 +28,6 @@
     'function deposit(uint256 pid,uint256 amount)',
     'function withdraw(uint256 pid,uint256 amount)'
   ];
-  var VAULT_ABI = [
-    'function bonusEndTimestamp() view returns (uint256)',
-    'function deposit(uint256 amount)',
-    'function pendingReward(address user) view returns (uint256)',
-    'function rewardPerSec() view returns (uint256)',
-    'function totalStaked() view returns (uint256)',
-    'function userInfo(address user) view returns (uint256 amount,uint256 rewardDebt)',
-    'function withdraw(uint256 amount)'
-  ];
   var PRICE_PAIR_ABI = [
     'function token0() view returns (address)',
     'function token1() view returns (address)',
@@ -57,7 +48,7 @@
     var p = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
     if (p === '/stocks' || p === '/farms') return 'stocks';
     if (p === '/pools') return 'pools';
-    if (p === '/staking' || p === '/vaults') return 'vaults';
+    if (p === '/memes' || p === '/staking' || p === '/vaults') return 'memes';
     return 'home';
   }
 
@@ -94,6 +85,10 @@
     return !!token && String(token.assetType || token.type || '').toLowerCase() === 'stock';
   }
 
+  function isMeme(token) {
+    return !!token && String(token.assetType || token.type || '').toLowerCase() === 'meme';
+  }
+
   function validFarm(farm) {
     return !!farm && farm.isTokenOnly === true && farm.pid != null && Number.isInteger(Number(farm.pid)) && !!tokenFor(farm);
   }
@@ -102,15 +97,12 @@
     return Array.isArray(C.farms) ? C.farms.filter(validFarm) : [];
   }
 
-  function configuredVaults() {
-    return Array.isArray(C.vaults) ? C.vaults.filter(function (v) {
-      return address(configuredAddress(v.address)) && (C.tokens || {})[v.stakingToken] && (C.tokens || {})[v.earningToken];
-    }) : [];
-  }
-
   function visibleFarms() {
     return allFarms().filter(function (farm) {
-      return state.route === 'stocks' ? isStock(tokenFor(farm)) : !isStock(tokenFor(farm));
+      var token = tokenFor(farm);
+      if (state.route === 'stocks') return isStock(token);
+      if (state.route === 'memes') return isMeme(token);
+      return !isStock(token) && !isMeme(token);
     });
   }
 
@@ -171,7 +163,7 @@
       ['home', '/', 'Overview'],
       ['pools', '/pools/', 'Token staking'],
       ['stocks', '/stocks/', 'Stock staking'],
-      ['vaults', '/staking/', 'Vaults']
+      ['memes', '/memes/', 'Meme staking']
     ];
     var navHtml = nav.map(function (n) {
       return '<a class="' + (state.route === n[0] ? 'active' : '') + '" href="' + n[1] + '"' + (state.route === n[0] ? ' aria-current="page"' : '') + '>' + n[2] + '</a>';
@@ -238,13 +230,6 @@
         if (farmData && Number.isInteger(farmData.decimals)) return Promise.resolve(farmData.decimals);
       }
     }
-    var vaults = configuredVaults();
-    for (var j = 0; j < vaults.length; j++) {
-      if (vaults[j].stakingToken === key) {
-        var vaultData = state.data['vault:' + String(vaults[j].sousId || vaults[j].address || '')];
-        if (vaultData && Number.isInteger(vaultData.decimals)) return Promise.resolve(vaultData.decimals);
-      }
-    }
     if (!address(tokenAddress)) return Promise.resolve(null);
     return new E.Contract(tokenAddress, ERC20_ABI, state.rpc).decimals().then(function (value) {
       var decimals = Number(value);
@@ -301,7 +286,7 @@
   function homeTvl() {
     if (Number(C.chainId) === 46630) return { value: 'Testnet', foot: 'Test tokens have no monetary value' };
     if (!state.rpcReady) return { value: '—', foot: 'Waiting for live pool data' };
-    var models = allFarms().map(poolModel).concat(configuredVaults().map(vaultModel));
+    var models = allFarms().map(poolModel);
     var totalUsd = 0;
     for (var i = 0; i < models.length; i++) {
       var model = models[i];
@@ -315,7 +300,7 @@
       totalUsd += amount * price;
       if (!Number.isFinite(totalUsd)) return { value: '—', foot: 'Estimated value is outside the display range' };
     }
-    return { value: formatUsd(totalUsd), foot: 'Across configured pools and vaults · estimated USD value' };
+    return { value: formatUsd(totalUsd), foot: 'Across configured staking pools · estimated USD value' };
   }
 
   function homeMarketCap() {
@@ -392,7 +377,7 @@
       '<section class="feature-grid">' +
       '<a class="panel feature-card" href="/pools/"><span class="feature-icon">◈</span><span class="arrow">↗</span><h3>Token staking</h3><p>Browse configured crypto-token pools and manage deposits, withdrawals and FORGE rewards.</p></a>' +
       '<a class="panel feature-card" href="/stocks/"><span class="feature-icon">▥</span><span class="arrow">↗</span><h3>Stock staking</h3><p>Stake supported Robinhood stock tokens. Deposits are accounted for in ERC-20 token units.</p></a>' +
-      '<a class="panel feature-card" href="/staking/"><span class="feature-icon">⌁</span><span class="arrow">↗</span><h3>Vaults</h3><p>See separately configured reward vaults and the assets each one accepts.</p></a>' +
+      '<a class="panel feature-card" href="/memes/"><span class="feature-icon">✦</span><span class="arrow">↗</span><h3>Meme staking</h3><p>Stake supported meme tokens through the same single-token pools and earn FORGE rewards.</p></a>' +
       '</section>' + positionHtml + footer() + '</main>';
   }
 
@@ -412,19 +397,6 @@
     };
   }
 
-  function vaultModel(vault) {
-    var key = String(vault.sousId || vault.address || '');
-    var tokenKeyName = String(vault.stakingToken || '');
-    var rewardKey = String(vault.earningToken || 'forge');
-    var stakeToken = metaToken((C.tokens || {})[tokenKeyName], tokenKeyName);
-    var rewardToken = metaToken((C.tokens || {})[rewardKey], rewardKey);
-    var live = state.data['vault:' + key] || {};
-    return { kind: 'vault', id: key, key: tokenKeyName, vault: vault, token: stakeToken, rewardToken: rewardToken,
-      decimals: live.decimals != null ? live.decimals : (stakeToken.decimals == null ? 18 : stakeToken.decimals),
-      totalStaked: live.totalStaked, userAmount: live.userAmount, pending: live.pending,
-      balance: live.balance, allowance: live.allowance, fee: 0, error: live.error || '' };
-  }
-
   function annualRewardRate(model) {
     if (model.kind !== 'farm' || model.totalStaked == null || model.allocPoint == null ||
         model.forgePerSec == null || model.totalAllocPoint == null) return '—';
@@ -442,23 +414,22 @@
   }
 
   function card(model) {
-    var isVault = model.kind === 'vault';
-    var rewardSymbol = isVault ? model.rewardToken.symbol : (C.tokenSymbol || 'FORGE');
+    var rewardSymbol = C.tokenSymbol || 'FORGE';
     var staked = model.totalStaked == null ? '—' : units(model.totalStaked, model.decimals) + ' ' + model.token.symbol;
     var user = state.account ? (model.userAmount == null ? '—' : units(model.userAmount, model.decimals) + ' ' + model.token.symbol) : 'Connect wallet';
-    var pending = state.account ? (model.pending == null ? '—' : units(model.pending, isVault ? (model.rewardToken.decimals || 18) : 18) + ' ' + rewardSymbol) : 'Connect wallet';
-    var badgeClass = isStock(model.token) ? 'tag stock-chip' : 'fee-chip';
-    var badge = isVault ? 'Vault' : (Number(model.fee) ? (Number(model.fee) / 100) + '% deposit fee' : 'No deposit fee');
+    var pending = state.account ? (model.pending == null ? '—' : units(model.pending, 18) + ' ' + rewardSymbol) : 'Connect wallet';
+    var badgeClass = isStock(model.token) ? 'tag stock-chip' : (isMeme(model.token) ? 'tag meme-chip' : 'fee-chip');
+    var badge = Number(model.fee) ? (Number(model.fee) / 100) + '% deposit fee' : 'No deposit fee';
     var mode = state.account && model.userAmount > 0n ? 'withdraw' : 'stake';
     var idAttr = ' data-kind="' + esc(model.kind) + '" data-key="' + esc(model.id) + '"';
     var rate = annualRewardRate(model);
     var rateTitle = 'Estimated annual FORGE rewards per one staked token, using current on-chain emissions, pool allocation and total stake. Assumes these values continue; this is not a USD APR.';
-    return '<article class="pool-card' + (isVault ? '' : ' has-rate') + '">' +
-      '<div class="asset-cell">' + icon(model.key) + '<div class="token-copy"><div class="token-symbol">' + esc(model.token.symbol) + ' <span class="' + badgeClass + '">' + esc(badge) + '</span></div><div class="token-name">' + esc(model.token.name) + (isVault ? ' · earns ' + esc(rewardSymbol) : '') + '</div></div></div>' +
-      (isVault ? '' : '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">Est. FORGE / token / yr</div><div class="metric-value">' + esc(rate) + '</div></div>') +
+    return '<article class="pool-card has-rate">' +
+      '<div class="asset-cell">' + icon(model.key) + '<div class="token-copy"><div class="token-symbol">' + esc(model.token.symbol) + ' <span class="' + badgeClass + '">' + esc(badge) + '</span></div><div class="token-name">' + esc(model.token.name) + '</div></div></div>' +
+      '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">Est. FORGE / token / yr</div><div class="metric-value">' + esc(rate) + '</div></div>' +
       '<div class="metric-col"><div class="metric-label">Total staked</div><div class="metric-value">' + esc(staked) + '</div></div>' +
       '<div class="metric-col stake-position-col"><div class="metric-label">Your stake</div><div class="metric-value dim">' + esc(user) + '</div></div>' +
-      '<div class="metric-col pending-col"><div class="metric-label">' + (isVault ? 'Pending reward' : 'Pending FORGE') + '</div><div class="metric-value">' + esc(pending) + '</div></div>' +
+      '<div class="metric-col pending-col"><div class="metric-label">Pending FORGE</div><div class="metric-value">' + esc(pending) + '</div></div>' +
       '<div class="card-actions">' +
       (state.account && model.pending > 0n ? '<button class="button compact ghost" data-action="harvest"' + idAttr + '>Claim</button>' : '') +
       (state.account && model.userAmount > 0n ? '<button class="button compact ghost" data-action="open-modal"' + idAttr + ' data-mode="withdraw">Withdraw</button>' : '') +
@@ -469,39 +440,36 @@
 
   function poolPage() {
     var stock = state.route === 'stocks';
+    var meme = state.route === 'memes';
     var list = visibleFarms().map(poolModel);
     var hasPools = list.length > 0;
     var searchText = state.query.toLowerCase().trim();
     if (searchText) list = list.filter(function (m) { return (m.token.symbol + ' ' + m.token.name).toLowerCase().indexOf(searchText) >= 0; });
     var cards = list.map(card).join('');
-    var empty = !list.length ? '<div class="empty-state"><div class="empty-mark">' + (stock ? '▥' : '◈') + '</div><h2>' + (searchText ? 'No matching pools' : (stock ? 'No stock pools configured' : 'No token pools configured')) + '</h2><p>' + (searchText ? 'Try another token symbol or name.' : (stock ? 'This deployment has no stock-token pools configured. Once a pool is added to the public configuration and deployed on this chain, it will appear here.' : 'This deployment has no crypto-token pools configured beyond any pools shown in the current network configuration.')) + '</p>' + (stock ? '<a class="button compact ghost" href="/pools/">Browse token staking</a>' : '') + '</div>' : cards;
-    var headers = stock ? 'Stake supported Robinhood stock tokens. Amounts are ERC-20 token units; stock multipliers do not change your deposited principal.' : 'Deposit a supported token to earn FORGE. Pool and fee details are checked against the configured contract.';
-    var warning = stock ? 'Stock tokens use ERC-20 token units. This interface never converts your deposit to underlying share quantities.' : 'Deposit fees are shown before approval. Withdrawals do not incur a deposit fee.';
+    var sectionName = stock ? 'Stock staking' : (meme ? 'Meme staking' : 'Token staking');
+    var emptyTitle = stock ? 'No stock pools configured' : (meme ? 'No meme pools configured' : 'No token pools configured');
+    var emptyCopy = stock ? 'This deployment has no stock-token pools configured. Once a verified pool is added to the MasterChef and public configuration, it will appear here.' : (meme ? 'No meme-token pools are live yet. Meme tokens use the same single-token MasterChef pools and earn FORGE rewards.' : 'This deployment has no crypto-token pools configured beyond the pools shown in the current network configuration.');
+    var empty = !list.length ? '<div class="empty-state"><div class="empty-mark">' + (stock ? '▥' : (meme ? '✦' : '◈')) + '</div><h2>' + (searchText ? 'No matching pools' : emptyTitle) + '</h2><p>' + (searchText ? 'Try another token symbol or name.' : emptyCopy) + '</p>' + (stock ? '<a class="button compact ghost" href="/pools/">Browse token staking</a>' : '') + '</div>' : cards;
+    var headers = stock ? 'Stake supported Robinhood stock tokens. Amounts are ERC-20 token units; stock multipliers do not change your deposited principal.' : (meme ? 'Stake supported meme tokens through the existing ERC-20 MasterChef pools and earn FORGE rewards.' : 'Deposit a supported token to earn FORGE. Pool and fee details are checked against the configured contract.');
+    var warning = stock ? 'Stock tokens use ERC-20 token units. This interface never converts your deposit to underlying share quantities.' : (meme ? 'Meme pools use the same token staking contract. Check the token contract address carefully; a request does not automatically list a token.' : 'Deposit fees are shown before approval. Withdrawals do not incur a deposit fee.');
     var rateNote = 'Estimated annual rates use current on-chain FORGE emissions, pool allocation and total stake. They assume these values continue, are denominated in FORGE per staked token, and are not USD APRs.';
     return '<main class="page">' + testnetStrip() + stateNotice() +
-      '<div class="page-title-row"><div><div class="eyebrow">YieldForge · Robinhood Chain</div><h1>' + (stock ? 'Stock staking' : 'Token staking') + '</h1><p>' + headers + '</p></div><div class="page-title-actions">' +
-      (hasPools ? '<input class="search" id="pool-search" type="search" value="' + esc(state.query) + '" placeholder="Search tokens" aria-label="Search tokens">' : '') + '</div></div>' +
+      '<div class="page-title-row"><div><div class="eyebrow">YieldForge · Robinhood Chain</div><h1>' + sectionName + '</h1><p>' + headers + '</p></div><div class="page-title-actions">' +
+      (hasPools ? '<input class="search" id="pool-search" type="search" value="' + esc(state.query) + '" placeholder="Search tokens" aria-label="Search tokens">' : '') +
+      (meme ? '<a class="button" href="' + esc(memeRequestHref()) + '">Add your meme token here</a>' : '') + '</div></div>' +
       '<div class="info-strip"><span class="info-icon">i</span><span>' + esc(warning + ' ' + rateNote) + '</span></div>' +
-      '<section class="pool-list" aria-label="' + (stock ? 'Stock staking pools' : 'Token staking pools') + '">' + (state.loading && !list.length ? '<div class="status-panel"><p>Reading configured pools from Robinhood Chain…</p></div>' : empty) + '</section>' + footer() + '</main>';
+      '<section class="pool-list" aria-label="' + (stock ? 'Stock staking pools' : (meme ? 'Meme staking pools' : 'Token staking pools')) + '">' + (state.loading && !list.length ? '<div class="status-panel"><p>Reading configured pools from Robinhood Chain…</p></div>' : empty) + '</section>' + footer() + '</main>';
   }
 
-  function vaultPage() {
-    var vaults = configuredVaults();
-    var hasVaults = vaults.length > 0;
-    var list = vaults.map(vaultModel).filter(function (m) {
-      if (!state.query) return true;
-      return (m.token.symbol + ' ' + m.token.name + ' ' + m.rewardToken.symbol).toLowerCase().indexOf(state.query.toLowerCase()) >= 0;
-    });
-    return '<main class="page">' + testnetStrip() + stateNotice() +
-      '<div class="page-title-row"><div><div class="eyebrow">YieldForge · Separate reward contracts</div><h1>Vaults</h1><p>Standalone pre-funded vaults with their own staking and reward contracts.</p></div>' +
-      (hasVaults ? '<div class="page-title-actions"><input class="search" id="pool-search" type="search" value="' + esc(state.query) + '" placeholder="Search vaults" aria-label="Search vaults"></div>' : '') + '</div>' +
-      '<div class="info-strip"><span class="info-icon">i</span><span>Vault rewards come from each vault contract and are separate from MasterChef pool emissions.</span></div>' +
-      '<section class="pool-list" aria-label="Configured vaults">' + (list.length ? list.map(card).join('') : '<div class="empty-state"><div class="empty-mark">⌁</div><h2>No vaults configured</h2><p>This deployment currently has no separate reward vaults. When a verified vault is added to the public configuration, it will appear here with its own stake, withdraw and claim controls.</p></div>') + '</section>' + footer() + '</main>';
+  function memeRequestHref() {
+    var subject = encodeURIComponent('Meme Token Pool Request');
+    var body = encodeURIComponent('Token Name: \nTicker: \nToken Contract: ');
+    return 'mailto:?subject=' + subject + '&body=' + body;
   }
 
   function render() {
     if (!root) return;
-    var page = state.route === 'home' ? renderHome() : (state.route === 'vaults' ? vaultPage() : poolPage());
+    var page = state.route === 'home' ? renderHome() : poolPage();
     root.innerHTML = header() + page;
   }
 
@@ -601,7 +569,7 @@
 
   function farmConfigsForCurrentView() {
     if (state.route === 'home') return allFarms();
-    if (state.route === 'stocks' || state.route === 'pools') return visibleFarms();
+    if (state.route === 'stocks' || state.route === 'pools' || state.route === 'memes') return visibleFarms();
     return [];
   }
 
@@ -649,38 +617,12 @@
     }
   }
 
-  async function loadVault(vault) {
-    var id = String(vault.sousId || vault.address || '');
-    var key = String(vault.stakingToken || '');
-    var rewardKey = String(vault.earningToken || 'forge');
-    var stakeToken = metaToken((C.tokens || {})[key], key);
-    var rewardToken = metaToken((C.tokens || {})[rewardKey], rewardKey);
-    try {
-      var vaultAddress = configuredAddress(vault.address);
-      var tokenContract = new E.Contract(stakeToken.address, ERC20_ABI, state.rpc);
-      var contract = new E.Contract(vaultAddress, VAULT_ABI, state.rpc);
-      var pair = await Promise.all([contract.totalStaked(), contract.rewardPerSec()]);
-      var decimals = stakeToken.decimals;
-      if (decimals == null) decimals = Number(await tokenContract.decimals());
-      var model = { kind: 'vault', id: id, key: key, vault: vault, token: stakeToken, rewardToken: rewardToken, decimals: decimals, totalStaked: pair[0], rewardPerSec: pair[1], userAmount: 0n, pending: 0n, balance: 0n, allowance: 0n, fee: 0 };
-      if (state.account) {
-        var results = await Promise.all([contract.userInfo(state.account), contract.pendingReward(state.account), tokenContract.balanceOf(state.account), tokenContract.allowance(state.account, vaultAddress)]);
-        model.userAmount = results[0][0]; model.pending = results[1]; model.balance = results[2]; model.allowance = results[3];
-      }
-      state.data['vault:' + id] = model;
-    } catch (error) {
-      state.data['vault:' + id] = { kind: 'vault', id: id, key: key, vault: vault, token: stakeToken, rewardToken: rewardToken, decimals: stakeToken.decimals || 18, error: messageForError(error), userAmount: 0n, pending: 0n, fee: 0 };
-    }
-  }
-
   async function refreshVisibleData() {
     if (!state.rpcReady || !C.enabled) return;
     var farms = farmConfigsForCurrentView();
-    var vaults = (state.route === 'vaults' || state.route === 'home') ? configuredVaults() : [];
-    if (!farms.length && !vaults.length && state.route !== 'home') { render(); return; }
+    if (!farms.length && state.route !== 'home') { render(); return; }
     state.loading = true; render();
     await mapLimit(farms, 4, loadFarm);
-    await mapLimit(vaults, 3, loadVault);
     if (state.route === 'home') await refreshUsdPrices();
     state.loading = false; render();
     if (state.modal) drawModal();
@@ -726,10 +668,7 @@
 
   function modalItem() {
     if (!state.modal) return null;
-    var m = state.modal;
-    if (m.kind === 'farm') return poolModel((C.farms || []).find(function (f) { return String(Number(f.pid)) === String(m.id); }));
-    var v = (C.vaults || []).find(function (x) { return String(x.sousId || x.address) === String(m.id); });
-    return v ? vaultModel(v) : null;
+    return poolModel((C.farms || []).find(function (f) { return String(Number(f.pid)) === String(state.modal.id); }));
   }
 
   function parseModalAmount(item) {
@@ -741,7 +680,6 @@
   function modalDescription(m, item) {
     var isWithdraw = m.mode === 'withdraw';
     if (isWithdraw) return 'Withdraw the selected amount from your position. Withdrawals do not have a deposit fee.';
-    if (item.kind === 'vault') return 'Deposit ' + item.token.symbol + ' into this vault. Rewards are paid by the separate vault contract.';
     return 'Deposit ' + item.token.symbol + ' into the configured MasterChef pool and earn FORGE rewards.';
   }
 
@@ -779,7 +717,7 @@
     var isWithdraw = state.modal.mode === 'withdraw';
     var balance = isWithdraw ? item.userAmount : item.balance;
     var balanceLabel = isWithdraw ? 'Available' : 'Wallet balance';
-    var rewardSymbol = item.kind === 'vault' ? item.rewardToken.symbol : (C.tokenSymbol || 'FORGE');
+    var rewardSymbol = C.tokenSymbol || 'FORGE';
     modalRoot.innerHTML = '<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><div><div class="modal-kicker">' + (isWithdraw ? 'Position management' : 'YieldForge staking') + '</div><h2 id="modal-title">' + (isWithdraw ? 'Withdraw ' : 'Stake ') + esc(item.token.symbol) + '</h2></div><button class="close-button" data-action="close-modal" aria-label="Close">×</button></div><div class="modal-body"><p class="hero-copy" style="font-size:12px;margin:0 0 18px">' + esc(modalDescription(state.modal, item)) + '</p><div class="balance-line"><span>' + balanceLabel + ': ' + esc(balance == null ? '—' : units(balance, item.decimals) + ' ' + item.token.symbol) + '</span><button type="button" data-action="max-amount">MAX</button></div><div class="amount-wrap"><input id="modal-amount" class="amount-input" inputmode="decimal" autocomplete="off" type="text" placeholder="0.00"><span class="amount-token">' + esc(item.token.symbol) + '</span></div><div class="amount-details" id="modal-summary"></div><div class="modal-actions"><button id="modal-primary" class="button" data-action="modal-primary">Connect wallet</button></div><p id="modal-note" class="tx-note" role="status">' + esc(state.modal.status || '') + '</p><div class="detail-row" style="margin-top:5px"><span>Reward asset</span><strong>' + esc(rewardSymbol) + '</strong></div></div></section></div>';
     updateModalSummary();
   }
@@ -813,7 +751,7 @@
     if (!amount || amount <= 0n) { setModalStatus('Enter an amount greater than zero.', 'error'); return; }
     var isWithdraw = state.modal.mode === 'withdraw';
     var inputText = currentInputValue().trim();
-    var spender = item.kind === 'vault' ? configuredAddress(item.vault.address) : C.masterChefAddress;
+    var spender = C.masterChefAddress;
     var tokenContract = new E.Contract(item.token.address, ERC20_ABI, await requireSigner());
     if (!isWithdraw && (item.allowance || 0n) < amount) {
       state.modal.busy = true; setModalStatus('Waiting for wallet approval…', 'busy');
@@ -833,13 +771,8 @@
     state.modal.busy = true; setModalStatus(isWithdraw ? 'Waiting for wallet confirmation…' : 'Waiting for wallet confirmation…', 'busy');
     try {
       var tx;
-      if (item.kind === 'vault') {
-        var vaultContract = new E.Contract(configuredAddress(item.vault.address), VAULT_ABI, await requireSigner());
-        tx = await sendWithMargin(vaultContract, isWithdraw ? 'withdraw' : 'deposit', [amount]);
-      } else {
-        var chef = new E.Contract(C.masterChefAddress, CHEF_ABI, await requireSigner());
-        tx = await sendWithMargin(chef, isWithdraw ? 'withdraw' : 'deposit', [Number(item.id), amount]);
-      }
+      var chef = new E.Contract(C.masterChefAddress, CHEF_ABI, await requireSigner());
+      tx = await sendWithMargin(chef, isWithdraw ? 'withdraw' : 'deposit', [Number(item.id), amount]);
       setModalStatus('Transaction sent. Waiting for confirmation…', 'busy');
       await tx.wait();
       state.modal = null; drawModal();
@@ -848,17 +781,10 @@
     } catch (error) { setModalStatus(messageForError(error), 'error'); }
   }
 
-  async function harvest(kind, id) {
+  async function harvest(id) {
     try {
       var signer = await requireSigner();
-      var tx;
-      if (kind === 'vault') {
-        var vault = (C.vaults || []).find(function (v) { return String(v.sousId || v.address) === String(id); });
-        if (!vault) throw new Error('Vault is no longer in the public configuration.');
-        tx = await sendWithMargin(new E.Contract(configuredAddress(vault.address), VAULT_ABI, signer), 'deposit', [0n]);
-      } else {
-        tx = await sendWithMargin(new E.Contract(C.masterChefAddress, CHEF_ABI, signer), 'deposit', [Number(id), 0n]);
-      }
+      var tx = await sendWithMargin(new E.Contract(C.masterChefAddress, CHEF_ABI, signer), 'deposit', [Number(id), 0n]);
       toast('Claim transaction sent.');
       await tx.wait();
       await refreshVisibleData();
@@ -882,7 +808,7 @@
     } else if (action === 'open-modal') {
       openModal(button.getAttribute('data-kind'), button.getAttribute('data-key'), button.getAttribute('data-mode'));
     } else if (action === 'harvest') {
-      harvest(button.getAttribute('data-kind'), button.getAttribute('data-key'));
+      harvest(button.getAttribute('data-key'));
     }
   }
 

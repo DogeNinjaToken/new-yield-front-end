@@ -1,4 +1,10 @@
 {
+  "redirects": [
+    { "source": "/staking", "destination": "/memes/", "permanent": true },
+    { "source": "/staking/:path*", "destination": "/memes/:path*", "permanent": true },
+    { "source": "/vaults", "destination": "/memes/", "permanent": true },
+    { "source": "/vaults/:path*", "destination": "/memes/:path*", "permanent": true }
+  ],
   "headers": [
     {
       "source": "/static/js/robinhood-config.js",

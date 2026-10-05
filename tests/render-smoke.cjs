@@ -10,13 +10,14 @@ const config = {
   tokenSymbol: 'FORGE',
   tokens: {
     forge: { address: '0x1111111111111111111111111111111111111111', symbol: 'FORGE', name: 'Forge', decimals: 18 },
-    amd: { address: '0x2222222222222222222222222222222222222222', symbol: 'AMD', name: 'AMD', assetType: 'stock', decimals: 18 }
+    amd: { address: '0x2222222222222222222222222222222222222222', symbol: 'AMD', name: 'AMD', assetType: 'stock', decimals: 18 },
+    doge: { address: '0x3333333333333333333333333333333333333333', symbol: 'DOGE', name: 'Dogecoin', assetType: 'meme', decimals: 18 }
   },
   farms: [
     { pid: 0, label: 'FORGE', token: 'forge', isTokenOnly: true, depositFeeBP: 100 },
-    { pid: 16, label: 'AMD', token: 'amd', isTokenOnly: true, depositFeeBP: 250 }
+    { pid: 16, label: 'AMD', token: 'amd', isTokenOnly: true, depositFeeBP: 250 },
+    { pid: 17, label: 'DOGE', token: 'doge', isTokenOnly: true, depositFeeBP: 250 }
   ],
-  vaults: [],
   links: {}
 };
 
@@ -61,7 +62,6 @@ async function testLiveHomeMetrics() {
       { pid: 1, token: 'asset', isTokenOnly: true },
       { pid: 2, token: 'forge', isTokenOnly: true }
     ],
-    vaults: [],
     links: {}
   };
   const app = { innerHTML: '', addEventListener() {} };
@@ -91,7 +91,7 @@ async function testLiveHomeMetrics() {
     location: { pathname: '/' },
     setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 0; }, addEventListener() {}, dispatchEvent() {}
   };
-  const exposed = source.replace("  root.addEventListener('click', handleRootClick);", "  window.__metricsTest = { state: state, refreshUsdPrices: refreshUsdPrices, homeTvl: homeTvl, homeMarketCap: homeMarketCap, dailyStakerRewards: dailyStakerRewards };\n  root.addEventListener('click', handleRootClick);");
+  const exposed = source.replace("  root.addEventListener('click', handleRootClick);", "  window.__metricsTest = { state: state, refreshUsdPrices: refreshUsdPrices, homeTvl: homeTvl, homeMarketCap: homeMarketCap, activeRewardPools: activeRewardPools };\n  root.addEventListener('click', handleRootClick);");
   const context = { window, document, console, BigInt, Set, Number, String, Array, Object, Math, Intl, Promise, URL };
   vm.createContext(context);
   vm.runInContext(exposed, context);
@@ -109,10 +109,11 @@ async function testLiveHomeMetrics() {
   assert.equal(state.usdPrices.forge, 4);
   assert.equal(window.__metricsTest.homeTvl().value, '$50.00');
   assert.equal(window.__metricsTest.homeMarketCap().value, '$4,000.00');
-  assert.equal(window.__metricsTest.dailyStakerRewards(), '64,800 FORGE / day');
-  state.stats.cap = state.stats.supply + 1n * 10n ** 18n;
-  assert.equal(window.__metricsTest.dailyStakerRewards(), '1 FORGE / day', 'daily rewards should respect remaining FORGE supply cap');
-  console.log('PASS live home TVL, pair-based FORGE price, market cap and capped daily rewards');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(window.__metricsTest.activeRewardPools())),
+    { value: '2 / 3', foot: '75% of total FORGE allocation is in pools with stakers' }
+  );
+  console.log('PASS live home TVL, pair-based FORGE price, market cap and active reward-pool allocation');
 }
 
 (async () => {
@@ -121,21 +122,23 @@ async function testLiveHomeMetrics() {
     ['/pools/', 'Token staking', '/pools/'],
     ['/stocks/', 'Stock staking', '/stocks/'],
     ['/farms/', 'Stock staking', '/stocks/'],
-    ['/staking/', 'Vaults', '/staking/']
+    ['/memes/', 'Meme staking', '/memes/'],
+    ['/staking/', 'Meme staking', '/memes/'],
+    ['/vaults/', 'Meme staking', '/memes/']
   ];
   for (const [path, heading, activeHref] of routes) {
     const html = await render(path);
     assert(html.toLowerCase().includes(heading.toLowerCase()), `${path} heading mismatch`);
     assert(html.includes(`href="${activeHref}" aria-current="page"`), `${path} active navigation mismatch`);
-    for (const target of ['/pools/', '/stocks/', '/staking/']) assert(html.includes(`href="${target}"`), `${path} missing ${target} navigation link`);
+    for (const target of ['/pools/', '/stocks/', '/memes/']) assert(html.includes(`href="${target}"`), `${path} missing ${target} navigation link`);
     console.log(`PASS ${path} renders ${heading}`);
   }
   const home = await render('/');
-  const requestedStats = ['Total value staked (TVL)', 'FORGE market cap', 'Earn up to'];
+  const requestedStats = ['Total value staked (TVL)', 'FORGE market cap', 'Active reward pools'];
   const statPositions = requestedStats.map(label => home.indexOf(`stat-label">${label}`));
   assert(statPositions.every(index => index >= 0) && statPositions[0] < statPositions[1] && statPositions[1] < statPositions[2], 'home page valuation and rewards cards should appear in the requested order');
   assert.match(home, /Test tokens have no monetary value/);
-  console.log('PASS home page shows TVL, FORGE market cap and daily rewards in the requested order');
+  console.log('PASS home page shows TVL, FORGE market cap and active reward pools in the requested order');
   const pools = await render('/pools/');
   assert.match(pools, /class="token-symbol">FORGE/);
   assert.doesNotMatch(pools, /class="token-symbol">AMD/);
@@ -148,7 +151,13 @@ async function testLiveHomeMetrics() {
   const stockRateIndex = stocks.indexOf('metric-label">Est. FORGE / token / yr');
   const stockStakedIndex = stocks.indexOf('metric-label">Total staked');
   assert(stockRateIndex >= 0 && stockRateIndex < stockStakedIndex, 'stock-pool rate should appear before total staked');
-  console.log('PASS token and stock routes separate configured pool categories');
+  const memes = await render('/memes/');
+  assert.match(memes, /class="token-symbol">DOGE/);
+  assert.doesNotMatch(memes, /class="token-symbol">FORGE|class="token-symbol">AMD/);
+  assert.match(memes, /href="mailto:\?subject=Meme%20Token%20Pool%20Request&amp;body=Token%20Name%3A%20%0ATicker%3A%20%0AToken%20Contract%3A%20"/);
+  assert.match(memes, /Add your meme token here/);
+  assert.doesNotMatch(home, /href="\/staking\/"|>Vaults</);
+  console.log('PASS token, stock and meme routes separate pool categories and show the prefilled meme-request email');
   await testLiveHomeMetrics();
 })().catch(error => {
   console.error(error);

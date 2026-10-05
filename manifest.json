@@ -1,7 +1,7 @@
 {
   "name": "YieldForge",
   "short_name": "YieldForge",
-  "description": "Single-token staking on Robinhood Chain",
+  "description": "Single-token token, stock and meme staking on Robinhood Chain",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#08090a",
