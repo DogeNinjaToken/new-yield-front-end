@@ -487,15 +487,13 @@
     return '<main class="page">' + testnetStrip() + stateNotice() +
       '<div class="page-title-row"><div><div class="eyebrow">YieldForge · Robinhood Chain</div><h1>' + sectionName + '</h1><p>' + headers + '</p></div><div class="page-title-actions">' +
       (hasPools ? '<input class="search" id="pool-search" type="search" value="' + esc(state.query) + '" placeholder="Search tokens" aria-label="Search tokens">' : '') +
-      (meme ? '<a class="button" href="' + esc(memeRequestHref()) + '">Add your meme token here</a>' : '') + '</div></div>' +
+      (meme ? '<a class="button" href="' + esc(memeRequestHref()) + '" target="_blank" rel="noopener noreferrer">Add your meme token here</a>' : '') + '</div></div>' +
       '<div class="info-strip"><span class="info-icon">i</span><span>' + esc(warning + ' ' + rateNote) + '</span></div>' +
       '<section class="pool-list" aria-label="' + (stock ? 'Stock staking pools' : (meme ? 'Meme staking pools' : 'Token staking pools')) + '">' + (state.loading && !list.length ? '<div class="status-panel"><p>Reading configured pools from Robinhood Chain…</p></div>' : empty) + '</section>' + footer() + '</main>';
   }
 
   function memeRequestHref() {
-    var subject = encodeURIComponent('Meme Token Pool Request');
-    var body = encodeURIComponent('Token Name: \nTicker: \nToken Contract: ');
-    return 'mailto:?subject=' + subject + '&body=' + body;
+    return 'https://forms.gle/dTXMaBD8fVZmhuFAA';
   }
 
   function render() {
