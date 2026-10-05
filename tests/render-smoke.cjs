@@ -26,7 +26,7 @@ async function render(pathname) {
   const modal = { innerHTML: '', addEventListener() {} };
   const toast = { replaceChildren() {} };
   const nodes = { app, 'modal-root': modal, 'toast-root': toast };
-  const document = { getElementById: id => nodes[id] || null, addEventListener() {}, hidden: false };
+  const document = { getElementById: id => nodes[id] || null, addEventListener() {}, hidden: false, createElement() { return { appendChild() {} }; } };
   const window = {
     ROBINHOOD_FARM: config,
     ethers: {},
@@ -48,7 +48,7 @@ async function testWalletPersistsAcrossNavigation() {
   const app = { innerHTML: '', addEventListener() {} };
   const modal = { innerHTML: '', addEventListener() {} };
   const nodes = { app, 'modal-root': modal, 'toast-root': { replaceChildren() {} } };
-  const document = { getElementById: id => nodes[id] || null, addEventListener() {}, hidden: false };
+  const document = { getElementById: id => nodes[id] || null, addEventListener() {}, hidden: false, createElement() { return { appendChild() {} }; } };
   const location = { pathname: '/' };
   const listeners = {};
   const window = {
@@ -93,6 +93,15 @@ async function testWalletPersistsAcrossNavigation() {
   assert.equal(state.account, '0x1234567890abcdef1234567890abcdef12345678');
   assert.equal(state.injected, provider);
   assert.equal(state.signer, signer);
+  function clickAction(action) {
+    const button = { getAttribute(name) { return name === 'data-action' ? action : null; } };
+    const walletControl = {};
+    window.__navigationTest.handleRootClick({
+      target: { closest(selector) { return selector === '[data-action]' ? button : (selector === '.wallet-control' ? walletControl : null); } },
+      button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+      preventDefault() {}
+    });
+  }
   assert.match(app.innerHTML, /wallet-button connected/);
   assert.match(app.innerHTML, /href="\/memes\/" aria-current="page"/);
 
@@ -124,6 +133,16 @@ async function testWalletPersistsAcrossNavigation() {
   assert.match(positionActions, /data-action="harvest" data-key="17" disabled title="No rewards available to claim">Claim<\/button>/, 'claim should be disabled when the position has no pending rewards');
   console.log('PASS home positions provide a claim-only action before withdrawal');
   console.log('PASS client-side navigation and browser history preserve the connected wallet');
+  clickAction('wallet-menu');
+  assert.match(app.innerHTML, /class="wallet-menu"/);
+  assert.match(app.innerHTML, /Disconnect wallet/);
+  assert.match(app.innerHTML, /aria-expanded="true"/);
+  clickAction('disconnect');
+  assert.equal(state.account, '', 'disconnect should clear the connected account from the app');
+  assert.equal(state.injected, null, 'disconnect should clear the injected provider from the app');
+  assert.equal(state.signer, null, 'disconnect should clear the signer from the app');
+  assert.match(app.innerHTML, /data-action="connect">Connect wallet/);
+  console.log('PASS wallet menu offers a working in-app disconnect action');
 }
 
 async function testLiveHomeMetrics() {
@@ -245,21 +264,21 @@ async function testLiveHomeMetrics() {
   const pools = await render('/pools/');
   assert.match(pools, /class="token-symbol">FORGE/);
   assert.doesNotMatch(pools, /class="token-symbol">AMD/);
-  const tokenRateIndex = pools.indexOf('metric-label">Est. FORGE/day per 1 FORGE staked');
+  const tokenRateIndex = pools.indexOf('metric-label"><span>Est. Daily FORGE rewards</span><span>for every FORGE staked</span>');
   const tokenStakedIndex = pools.indexOf('metric-label">Total staked');
   assert(tokenRateIndex >= 0 && tokenRateIndex < tokenStakedIndex, 'token-pool daily per-token rate should appear before total staked');
   assert.match(pools, /Estimated FORGE earned over 24 hours for 1 whole FORGE token staked/);
   const stocks = await render('/stocks/');
   assert.match(stocks, /class="token-symbol">AMD/);
   assert.doesNotMatch(stocks, /class="token-symbol">FORGE/);
-  const stockRateIndex = stocks.indexOf('metric-label">Est. FORGE/day per 1 AMD staked');
+  const stockRateIndex = stocks.indexOf('metric-label"><span>Est. Daily FORGE rewards</span><span>for every AMD staked</span>');
   const stockStakedIndex = stocks.indexOf('metric-label">Total staked');
   assert(stockRateIndex >= 0 && stockRateIndex < stockStakedIndex, 'stock-pool daily per-token rate should appear before total staked');
   assert.match(stocks, /Estimated FORGE earned over 24 hours for 1 whole AMD token staked/);
   const memes = await render('/memes/');
   assert.match(memes, /class="token-symbol">DOGE/);
   assert.doesNotMatch(memes, /class="token-symbol">FORGE|class="token-symbol">AMD/);
-  assert.match(memes, /Est\. FORGE\/day per 1 DOGE staked/);
+  assert.match(memes, /<span>Est\. Daily FORGE rewards<\/span><span>for every DOGE staked<\/span>/);
   assert.match(memes, /Estimated FORGE earned over 24 hours for 1 whole DOGE token staked/);
   assert.match(memes, /href="https:\/\/forms\.gle\/dTXMaBD8fVZmhuFAA" target="_blank" rel="noopener noreferrer">Add your meme token here/);
   assert.doesNotMatch(memes, /href="mailto:/);

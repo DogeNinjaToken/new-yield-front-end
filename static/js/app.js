@@ -40,7 +40,8 @@
   var state = {
     route: routeFromPath(), rpc: null, chef: null, forge: null,
     rpcReady: false, rpcError: '', stats: null, usdPrices: {}, account: '',
-    injected: null, signer: null, data: {}, ratePools: {}, loading: false,
+    injected: null, signer: null, providerListeners: null, connectionToken: null,
+    data: {}, ratePools: {}, loading: false, walletMenuOpen: false,
     query: '', modal: null, startupWarning: '', refreshTimer: null
   };
 
@@ -200,11 +201,17 @@
       return '<a class="' + (state.route === n[0] ? 'active' : '') + '" href="' + n[1] + '"' + (state.route === n[0] ? ' aria-current="page"' : '') + '>' + n[2] + '</a>';
     }).join('');
     var walletLabel = state.account ? shortAddress(state.account) : 'Connect wallet';
+    var walletButton = state.account
+      ? '<button class="wallet-button connected" data-action="wallet-menu" aria-haspopup="true" aria-expanded="' + (state.walletMenuOpen ? 'true' : 'false') + '" aria-controls="wallet-menu">' + esc(walletLabel) + '</button>'
+      : '<button class="wallet-button" data-action="connect">Connect wallet</button>';
+    var walletMenu = state.account && state.walletMenuOpen
+      ? '<div class="wallet-menu" id="wallet-menu"><div class="wallet-menu-title">Connected wallet</div><div class="wallet-menu-address">' + esc(state.account) + '</div><button class="button compact ghost" data-action="disconnect">Disconnect wallet</button></div>'
+      : '';
     return '<header class="topbar"><div class="topbar-inner">' +
       '<a class="brand" href="/" aria-label="YieldForge overview"><img src="/images/LogoTextNewDark.png" alt="YieldForge"></a>' +
       '<nav class="nav" aria-label="Main navigation">' + navHtml + '</nav>' +
       '<div class="top-actions"><div class="network-chip ' + (state.rpcReady ? '' : 'offline') + '"><i class="network-dot"></i><span>' + esc(chainLabel()) + '</span></div>' +
-      '<button class="wallet-button ' + (state.account ? 'connected' : '') + '" data-action="connect">' + esc(walletLabel) + '</button></div>' +
+      '<div class="wallet-control">' + walletButton + walletMenu + '</div></div>' +
       '</div></header>';
   }
 
@@ -475,11 +482,11 @@
     var mode = state.account && model.userAmount > 0n ? 'withdraw' : 'stake';
     var idAttr = ' data-kind="' + esc(model.kind) + '" data-key="' + esc(model.id) + '"';
     var rate = dailyRewardRate(model);
-    var rateLabel = 'Est. FORGE/day per 1 ' + model.token.symbol + ' staked';
+    var rateLabel = '<span>Est. Daily FORGE rewards</span><span>for every ' + esc(model.token.symbol) + ' staked</span>';
     var rateTitle = 'Estimated FORGE earned over 24 hours for 1 whole ' + model.token.symbol + ' token staked, using current emissions, pool allocation, total stake and remaining supply. It changes as pool conditions change; near the supply cap, actual rewards can vary with pool update timing. It is not guaranteed or a USD APR.';
     return '<article class="pool-card has-rate">' +
       '<div class="asset-cell">' + icon(model.key) + '<div class="token-copy"><div class="token-symbol">' + esc(model.token.symbol) + ' <span class="' + badgeClass + '">' + esc(badge) + '</span></div><div class="token-name">' + esc(model.token.name) + '</div></div></div>' +
-      '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">' + esc(rateLabel) + '</div><div class="metric-value">' + esc(rate) + '</div></div>' +
+      '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">' + rateLabel + '</div><div class="metric-value">' + esc(rate) + '</div></div>' +
       '<div class="metric-col"><div class="metric-label">Total staked</div><div class="metric-value">' + esc(staked) + '</div></div>' +
       '<div class="metric-col stake-position-col"><div class="metric-label">Your stake</div><div class="metric-value dim">' + esc(user) + '</div></div>' +
       '<div class="metric-col pending-col"><div class="metric-label">Pending FORGE</div><div class="metric-value">' + esc(pending) + '</div></div>' +
@@ -591,23 +598,57 @@
     var accounts = await provider.request({ method: 'eth_requestAccounts' });
     if (!accounts || !accounts.length) throw new Error('The wallet did not return an account.');
     await switchWalletNetwork(provider);
+    clearProviderListeners();
     state.injected = provider;
     state.account = accounts[0];
+    state.walletMenuOpen = false;
+    state.connectionToken = {};
+    var connectionToken = state.connectionToken;
     var browserProvider = new E.BrowserProvider(provider, 'any');
     state.signer = await browserProvider.getSigner(state.account);
     if (typeof provider.on === 'function') {
-      provider.on('accountsChanged', function (next) {
+      var accountsChanged = function (next) {
+        if (state.connectionToken !== connectionToken) return;
         state.account = next && next[0] ? next[0] : '';
         state.signer = null;
         state.data = {};
+        state.walletMenuOpen = false;
         render();
         refreshVisibleData();
-      });
-      provider.on('chainChanged', function () { window.location.reload(); });
+      };
+      var chainChanged = function () { if (state.connectionToken === connectionToken) window.location.reload(); };
+      provider.on('accountsChanged', accountsChanged);
+      provider.on('chainChanged', chainChanged);
+      state.providerListeners = { provider: provider, accountsChanged: accountsChanged, chainChanged: chainChanged };
     }
     render();
     await refreshVisibleData();
     toast('Wallet connected.');
+  }
+
+  function clearProviderListeners() {
+    var listeners = state.providerListeners;
+    state.providerListeners = null;
+    state.connectionToken = null;
+    if (!listeners) return;
+    var remove = listeners.provider.removeListener || listeners.provider.off;
+    if (typeof remove !== 'function') return;
+    try { remove.call(listeners.provider, 'accountsChanged', listeners.accountsChanged); } catch (_) {}
+    try { remove.call(listeners.provider, 'chainChanged', listeners.chainChanged); } catch (_) {}
+  }
+
+  function disconnectWallet() {
+    clearProviderListeners();
+    state.account = '';
+    state.injected = null;
+    state.signer = null;
+    state.data = {};
+    state.walletMenuOpen = false;
+    state.modal = null;
+    drawModal();
+    render();
+    refreshVisibleData().catch(function (error) { console.error('YieldForge wallet disconnect refresh:', error); });
+    toast('Wallet disconnected from YieldForge.');
   }
 
   async function requireSigner() {
@@ -874,6 +915,12 @@
 
   function handleRootClick(event) {
     var target = event.target;
+    var walletControl = target && typeof target.closest === 'function' ? target.closest('.wallet-control') : null;
+    var wasWalletMenuOpen = state.walletMenuOpen;
+    if (wasWalletMenuOpen && !walletControl) {
+      state.walletMenuOpen = false;
+      render();
+    }
     var link = target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
     if (link && (event.button == null || event.button === 0) && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && link.getAttribute('target') !== '_blank') {
       var href = link.getAttribute('href') || '';
@@ -889,6 +936,11 @@
     var action = button.getAttribute('data-action');
     if (action === 'connect') {
       connectWallet().catch(function (error) { toast(messageForError(error)); });
+    } else if (action === 'wallet-menu') {
+      state.walletMenuOpen = !state.walletMenuOpen;
+      render();
+    } else if (action === 'disconnect') {
+      disconnectWallet();
     } else if (action === 'open-modal') {
       openModal(button.getAttribute('data-kind'), button.getAttribute('data-key'), button.getAttribute('data-mode'));
     } else if (action === 'harvest') {
@@ -951,6 +1003,10 @@
   window.addEventListener('popstate', handlePopState);
   modalRoot.addEventListener('click', handleModalClick);
   modalRoot.addEventListener('input', handleInput);
-  document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && state.modal) { state.modal = null; drawModal(); } });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    if (state.modal) { state.modal = null; drawModal(); }
+    if (state.walletMenuOpen) { state.walletMenuOpen = false; render(); }
+  });
   start();
 })();
