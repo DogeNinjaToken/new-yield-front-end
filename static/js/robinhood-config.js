@@ -22,6 +22,13 @@ window.ROBINHOOD_FARM = {
       "symbol": "cbBTC",
       "name": "Coinbase Wrapped BTC",
       "decimals": 8
+    },
+    "tsla": {
+      "address": "0xC9f9c86933092BbbfFF3CCb4b105A4A94bf3Bd4E",
+      "symbol": "TSLA",
+      "name": "Tesla",
+      "decimals": 18,
+      "assetType": "stock"
     }
   },
   "pricePairs": [],
@@ -41,6 +48,16 @@ window.ROBINHOOD_FARM = {
       "label": "cbBTC",
       "token": "cbbtc",
       "quoteToken": "cbbtc",
+      "isTokenOnly": true,
+      "stakeAddress": "",
+      "depositFeeBP": 250,
+      "allocPoint": 100
+    },
+    {
+      "pid": 2,
+      "label": "TSLA",
+      "token": "tsla",
+      "quoteToken": "tsla",
       "isTokenOnly": true,
       "stakeAddress": "",
       "depositFeeBP": 250,
