@@ -40,7 +40,7 @@
   var state = {
     route: routeFromPath(), rpc: null, chef: null, forge: null,
     rpcReady: false, rpcError: '', stats: null, usdPrices: {}, account: '',
-    injected: null, signer: null, data: {}, loading: false,
+    injected: null, signer: null, data: {}, ratePools: {}, loading: false,
     query: '', modal: null, startupWarning: '', refreshTimer: null
   };
 
@@ -429,7 +429,7 @@
     };
   }
 
-  function annualRewardRate(model) {
+  function dailyRewardRate(model) {
     if (model.kind !== 'farm' || model.totalStaked == null || model.allocPoint == null ||
         model.forgePerSec == null || model.totalAllocPoint == null) return '—';
     try {
@@ -440,7 +440,27 @@
       if (totalStaked === 0n) return 'Awaiting stake';
       if (allocPoint === 0n || totalAllocPoint === 0n || forgePerSec === 0n) return '0';
       var tokenScale = 10n ** BigInt(model.decimals);
-      var rate = (forgePerSec * allocPoint * 31536000n * tokenScale) / (totalAllocPoint * totalStaked);
+      var rate = (forgePerSec * allocPoint * 86400n * tokenScale) / (totalAllocPoint * totalStaked);
+
+      // When the remaining FORGE supply cannot cover one day of emissions,
+      // scale the estimate across currently active pool weights.
+      if (state.stats && state.stats.supply != null && state.stats.cap != null) {
+        var supply = BigInt(state.stats.supply);
+        var cap = BigInt(state.stats.cap);
+        var remainingSupply = cap > supply ? cap - supply : 0n;
+        if (remainingSupply === 0n) return '0';
+        var activeAllocPoint = 0n;
+        var poolCount = state.stats.poolLength == null ? null : Number(state.stats.poolLength);
+        var poolIds = poolCount == null ? allFarms().map(function (farm) { return String(Number(farm.pid)); }) : Array.from({ length: poolCount }, function (_, pid) { return String(pid); });
+        for (var i = 0; i < poolIds.length; i++) {
+          var pool = state.ratePools[poolIds[i]];
+          if (!pool || pool.totalStaked == null || pool.allocPoint == null) return '—';
+          if (BigInt(pool.totalStaked) > 0n && BigInt(pool.allocPoint) > 0n) activeAllocPoint += BigInt(pool.allocPoint);
+        }
+        if (activeAllocPoint > 0n && forgePerSec * 86400n * activeAllocPoint > remainingSupply * totalAllocPoint) {
+          rate = (allocPoint * tokenScale * remainingSupply) / (totalStaked * activeAllocPoint);
+        }
+      }
       return units(rate, 18, 4);
     } catch (_) { return '—'; }
   }
@@ -454,11 +474,12 @@
     var badge = Number(model.fee) ? (Number(model.fee) / 100) + '% deposit fee' : 'No deposit fee';
     var mode = state.account && model.userAmount > 0n ? 'withdraw' : 'stake';
     var idAttr = ' data-kind="' + esc(model.kind) + '" data-key="' + esc(model.id) + '"';
-    var rate = annualRewardRate(model);
-    var rateTitle = 'Estimated annual FORGE rewards per one staked token, using current on-chain emissions, pool allocation and total stake. Assumes these values continue; this is not a USD APR.';
+    var rate = dailyRewardRate(model);
+    var rateLabel = 'Est. FORGE/day per 1 ' + model.token.symbol + ' staked';
+    var rateTitle = 'Estimated FORGE earned over 24 hours for 1 whole ' + model.token.symbol + ' token staked, using current emissions, pool allocation, total stake and remaining supply. It changes as pool conditions change; near the supply cap, actual rewards can vary with pool update timing. It is not guaranteed or a USD APR.';
     return '<article class="pool-card has-rate">' +
       '<div class="asset-cell">' + icon(model.key) + '<div class="token-copy"><div class="token-symbol">' + esc(model.token.symbol) + ' <span class="' + badgeClass + '">' + esc(badge) + '</span></div><div class="token-name">' + esc(model.token.name) + '</div></div></div>' +
-      '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">Est. FORGE / token / yr</div><div class="metric-value">' + esc(rate) + '</div></div>' +
+      '<div class="metric-col reward-rate-col" title="' + esc(rateTitle) + '"><div class="metric-label">' + esc(rateLabel) + '</div><div class="metric-value">' + esc(rate) + '</div></div>' +
       '<div class="metric-col"><div class="metric-label">Total staked</div><div class="metric-value">' + esc(staked) + '</div></div>' +
       '<div class="metric-col stake-position-col"><div class="metric-label">Your stake</div><div class="metric-value dim">' + esc(user) + '</div></div>' +
       '<div class="metric-col pending-col"><div class="metric-label">Pending FORGE</div><div class="metric-value">' + esc(pending) + '</div></div>' +
@@ -484,7 +505,7 @@
     var empty = !list.length ? '<div class="empty-state"><div class="empty-mark">' + (stock ? '▥' : (meme ? '✦' : '◈')) + '</div><h2>' + (searchText ? 'No matching pools' : emptyTitle) + '</h2><p>' + (searchText ? 'Try another token symbol or name.' : emptyCopy) + '</p>' + (stock ? '<a class="button compact ghost" href="/pools/">Browse token staking</a>' : '') + '</div>' : cards;
     var headers = stock ? 'Stake supported Robinhood stock tokens. Amounts are ERC-20 token units; stock multipliers do not change your deposited principal.' : (meme ? 'Stake supported meme tokens through the existing ERC-20 MasterChef pools and earn FORGE rewards.' : 'Deposit a supported token to earn FORGE. Pool and fee details are checked against the configured contract.');
     var warning = stock ? 'Stock tokens use ERC-20 token units. This interface never converts your deposit to underlying share quantities.' : (meme ? 'Meme pools use the same token staking contract. Check the token contract address carefully; a request does not automatically list a token.' : 'Deposit fees are shown before approval. Withdrawals do not incur a deposit fee.');
-    var rateNote = 'Estimated annual rates use current on-chain FORGE emissions, pool allocation and total stake. They assume these values continue, are denominated in FORGE per staked token, and are not USD APRs.';
+    var rateNote = 'Daily estimates show FORGE per 1 whole pool token staked, using current emissions, pool allocation, total stake and remaining supply. Multiply the displayed rate by your staked amount for a rough daily estimate. Rewards vary and are not guaranteed or a USD APR.';
     return '<main class="page">' + testnetStrip() + stateNotice() +
       '<div class="page-title-row"><div><div class="eyebrow">YieldForge · Robinhood Chain</div><h1>' + sectionName + '</h1><p>' + headers + '</p></div><div class="page-title-actions">' +
       (hasPools ? '<input class="search" id="pool-search" type="search" value="' + esc(state.query) + '" placeholder="Search tokens" aria-label="Search tokens">' : '') +
@@ -647,12 +668,26 @@
     }
   }
 
+  async function refreshRatePools() {
+    var count = state.stats && Number(state.stats.poolLength);
+    if (!state.chef || !Number.isInteger(count) || count < 0) return;
+    var poolIds = Array.from({ length: count }, function (_, pid) { return pid; });
+    await mapLimit(poolIds, 4, async function (pid) {
+      try {
+        var info = await state.chef.poolInfo(pid);
+        state.ratePools[String(pid)] = { totalStaked: info[5], allocPoint: info[1] };
+      } catch (_) {
+        state.ratePools[String(pid)] = { error: true };
+      }
+    });
+  }
+
   async function refreshVisibleData() {
     if (!state.rpcReady || !C.enabled) return;
     var farms = farmConfigsForCurrentView();
     if (!farms.length && state.route !== 'home') { render(); return; }
     state.loading = true; render();
-    await mapLimit(farms, 4, loadFarm);
+    await Promise.all([mapLimit(farms, 4, loadFarm), refreshRatePools()]);
     if (state.route === 'home') await refreshUsdPrices();
     state.loading = false; render();
     if (state.modal) drawModal();
@@ -684,15 +719,23 @@
       if (pidSet.has(Number(f.pid)) || Number(f.pid) >= length) throw new Error('Configured pool IDs do not match the deployed MasterChef pool count.');
       pidSet.add(Number(f.pid));
     }
-    state.stats = { supply: checks[5], cap: checks[3], perSec: checks[4], perDay: checks[4] * 86400n, totalAllocPoint: checks[6], startTimestamp: checks[7] };
+    state.stats = { supply: checks[5], cap: checks[3], perSec: checks[4], perDay: checks[4] * 86400n, totalAllocPoint: checks[6], startTimestamp: checks[7], poolLength: checks[2] };
     state.rpcReady = true;
     state.rpcError = '';
     state.startupWarning = '';
-    await mapLimit(farms, 4, async function (farm) {
-      var info = await state.chef.poolInfo(Number(farm.pid));
-      var token = metaToken(tokenFor(farm), tokenKey(farm));
-      if (!token.address || String(info[0]).toLowerCase() !== token.address.toLowerCase()) throw new Error('Configured token does not match deployed pool ' + farm.pid + '.');
-      if (farm.depositFeeBP != null && Number(info[4]) !== Number(farm.depositFeeBP)) throw new Error('Configured fee does not match deployed pool ' + farm.pid + '.');
+    var configuredByPid = {};
+    farms.forEach(function (farm) { configuredByPid[String(Number(farm.pid))] = farm; });
+    state.ratePools = {};
+    var poolIds = Array.from({ length: length }, function (_, pid) { return pid; });
+    await mapLimit(poolIds, 4, async function (pid) {
+      var info = await state.chef.poolInfo(pid);
+      var farm = configuredByPid[String(pid)];
+      if (farm) {
+        var token = metaToken(tokenFor(farm), tokenKey(farm));
+        if (!token.address || String(info[0]).toLowerCase() !== token.address.toLowerCase()) throw new Error('Configured token does not match deployed pool ' + pid + '.');
+        if (farm.depositFeeBP != null && Number(info[4]) !== Number(farm.depositFeeBP)) throw new Error('Configured fee does not match deployed pool ' + pid + '.');
+      }
+      state.ratePools[String(pid)] = { totalStaked: info[5], allocPoint: info[1] };
     });
   }
 
@@ -890,7 +933,7 @@
       state.refreshTimer = window.setInterval(function () {
         if (!document.hidden && state.rpcReady) {
           Promise.all([state.forge.totalSupply(), state.chef.maxSupply(), state.chef.forgePerSec(), state.chef.totalAllocPoint(), state.chef.startTimestamp()]).then(function (values) {
-            state.stats = { supply: values[0], cap: values[1], perSec: values[2], perDay: values[2] * 86400n, totalAllocPoint: values[3], startTimestamp: values[4] }; render();
+            state.stats = { supply: values[0], cap: values[1], perSec: values[2], perDay: values[2] * 86400n, totalAllocPoint: values[3], startTimestamp: values[4], poolLength: state.stats && state.stats.poolLength }; render();
           }).catch(function () {});
           refreshVisibleData();
         }

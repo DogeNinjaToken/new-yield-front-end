@@ -2,3 +2,4 @@
  .meme-chip{border-color:#56365a;background:rgba(184,92,212,.1);color:#dca2ed}.page-title-actions .button{white-space:nowrap}@media(max-width:720px){.page-title-actions{flex-wrap:wrap}.page-title-actions .search{flex:1 1 100%;width:100%}.page-title-actions .button{flex:1 1 auto;text-align:center}}
 
 .position-actions{display:flex;justify-content:flex-end;gap:8px}
+.reward-rate-col .metric-label{text-transform:none;letter-spacing:0;font-size:10px;line-height:1.35;overflow-wrap:anywhere}

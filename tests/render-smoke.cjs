@@ -173,7 +173,7 @@ async function testLiveHomeMetrics() {
     location: { pathname: '/' },
     setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 0; }, addEventListener() {}, dispatchEvent() {}
   };
-  const exposed = source.replace("  root.addEventListener('click', handleRootClick);", "  window.__metricsTest = { state: state, refreshUsdPrices: refreshUsdPrices, homeTvl: homeTvl, homeMarketCap: homeMarketCap, activeRewardPools: activeRewardPools };\n  root.addEventListener('click', handleRootClick);");
+  const exposed = source.replace("  root.addEventListener('click', handleRootClick);", "  window.__metricsTest = { state: state, refreshUsdPrices: refreshUsdPrices, homeTvl: homeTvl, homeMarketCap: homeMarketCap, activeRewardPools: activeRewardPools, dailyRewardRate: dailyRewardRate };\n  root.addEventListener('click', handleRootClick);");
   const context = { window, document, console, BigInt, Set, Number, String, Array, Object, Math, Intl, Promise, URL };
   vm.createContext(context);
   vm.runInContext(exposed, context);
@@ -181,12 +181,33 @@ async function testLiveHomeMetrics() {
   const state = window.__metricsTest.state;
   state.rpc = {};
   state.rpcReady = true;
-  state.stats = { supply: 1000n * 10n ** 18n, cap: 200000n * 10n ** 18n, perSec: 1n * 10n ** 18n, totalAllocPoint: 400n, startTimestamp: 0n };
+  state.stats = { supply: 1000n * 10n ** 18n, cap: 200000n * 10n ** 18n, perSec: 1n * 10n ** 18n, totalAllocPoint: 400n, startTimestamp: 0n, poolLength: 3n };
   state.data = {
     'farm:0': { totalStaked: 10n * 10n ** 18n, allocPoint: 100n, decimals: 18 },
     'farm:1': { totalStaked: 5n * 10n ** 18n, allocPoint: 200n, decimals: 18 },
     'farm:2': { totalStaked: 0n, allocPoint: 100n, decimals: 18 }
   };
+  state.ratePools = {
+    '0': { totalStaked: 10n * 10n ** 18n, allocPoint: 100n },
+    '1': { totalStaked: 5n * 10n ** 18n, allocPoint: 200n },
+    '2': { totalStaked: 0n, allocPoint: 100n }
+  };
+  const rewardRate = window.__metricsTest.dailyRewardRate({
+    kind: 'farm', totalStaked: 5n * 10n ** 18n, allocPoint: 200n,
+    forgePerSec: 1n * 10n ** 18n, totalAllocPoint: 400n, decimals: 18
+  });
+  assert.equal(rewardRate, '8,640', 'daily reward rate should account for pool allocation and full-token stake units');
+  assert.equal(window.__metricsTest.dailyRewardRate({
+    kind: 'farm', totalStaked: 5n * 10n ** 6n, allocPoint: 200n,
+    forgePerSec: 1n * 10n ** 18n, totalAllocPoint: 400n, decimals: 6
+  }), rewardRate, 'daily rate should be normalized for tokens with different decimals');
+  state.stats.supply = 199999n * 10n ** 18n;
+  assert.equal(window.__metricsTest.dailyRewardRate({
+    kind: 'farm', totalStaked: 5n * 10n ** 18n, allocPoint: 200n,
+    forgePerSec: 1n * 10n ** 18n, totalAllocPoint: 400n, decimals: 18
+  }), '0.1333', 'daily estimate should scale across active pool weights when remaining supply cannot cover one day');
+  state.stats.supply = 1000n * 10n ** 18n;
+  console.log('PASS daily per-token reward math, token decimals and remaining supply cap adjustment');
   await window.__metricsTest.refreshUsdPrices();
   assert.equal(state.usdPrices.forge, 4);
   assert.equal(window.__metricsTest.homeTvl().value, '$50.00');
@@ -224,18 +245,22 @@ async function testLiveHomeMetrics() {
   const pools = await render('/pools/');
   assert.match(pools, /class="token-symbol">FORGE/);
   assert.doesNotMatch(pools, /class="token-symbol">AMD/);
-  const tokenRateIndex = pools.indexOf('metric-label">Est. FORGE / token / yr');
+  const tokenRateIndex = pools.indexOf('metric-label">Est. FORGE/day per 1 FORGE staked');
   const tokenStakedIndex = pools.indexOf('metric-label">Total staked');
-  assert(tokenRateIndex >= 0 && tokenRateIndex < tokenStakedIndex, 'token-pool rate should appear before total staked');
+  assert(tokenRateIndex >= 0 && tokenRateIndex < tokenStakedIndex, 'token-pool daily per-token rate should appear before total staked');
+  assert.match(pools, /Estimated FORGE earned over 24 hours for 1 whole FORGE token staked/);
   const stocks = await render('/stocks/');
   assert.match(stocks, /class="token-symbol">AMD/);
   assert.doesNotMatch(stocks, /class="token-symbol">FORGE/);
-  const stockRateIndex = stocks.indexOf('metric-label">Est. FORGE / token / yr');
+  const stockRateIndex = stocks.indexOf('metric-label">Est. FORGE/day per 1 AMD staked');
   const stockStakedIndex = stocks.indexOf('metric-label">Total staked');
-  assert(stockRateIndex >= 0 && stockRateIndex < stockStakedIndex, 'stock-pool rate should appear before total staked');
+  assert(stockRateIndex >= 0 && stockRateIndex < stockStakedIndex, 'stock-pool daily per-token rate should appear before total staked');
+  assert.match(stocks, /Estimated FORGE earned over 24 hours for 1 whole AMD token staked/);
   const memes = await render('/memes/');
   assert.match(memes, /class="token-symbol">DOGE/);
   assert.doesNotMatch(memes, /class="token-symbol">FORGE|class="token-symbol">AMD/);
+  assert.match(memes, /Est\. FORGE\/day per 1 DOGE staked/);
+  assert.match(memes, /Estimated FORGE earned over 24 hours for 1 whole DOGE token staked/);
   assert.match(memes, /href="https:\/\/forms\.gle\/dTXMaBD8fVZmhuFAA" target="_blank" rel="noopener noreferrer">Add your meme token here/);
   assert.doesNotMatch(memes, /href="mailto:/);
   assert.doesNotMatch(home, /href="\/staking\/"|>Vaults</);
