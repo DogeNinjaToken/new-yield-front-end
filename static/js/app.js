@@ -328,29 +328,33 @@
     return { value: formatUsd(supply * price), foot: 'Total FORGE supply × estimated spot price' };
   }
 
-  function dailyStakerRewards() {
-    if (!state.rpcReady || !state.stats || state.stats.perSec == null || state.stats.totalAllocPoint == null) return '—';
+  function activeRewardPools() {
+    if (!state.rpcReady || !state.stats || state.stats.totalAllocPoint == null) {
+      return { value: '—', foot: 'Waiting for live pool data' };
+    }
     var farms = allFarms();
-    if (!farms.length) return '0 FORGE / day';
+    if (!farms.length) return { value: '0 / 0', foot: 'No configured token or stock pools' };
     var totalAlloc = BigInt(state.stats.totalAllocPoint);
-    var perSecond = BigInt(state.stats.perSec);
-    if (totalAlloc === 0n || perSecond === 0n) return '0 FORGE / day';
-    if (state.stats.startTimestamp != null && Number(state.stats.startTimestamp) > Math.floor(Date.now() / 1000)) return '0 FORGE / day';
-    var daily = 0n;
+    var activeAlloc = 0n;
+    var activeCount = 0;
     for (var i = 0; i < farms.length; i++) {
       var model = poolModel(farms[i]);
-      if (model.error || model.totalStaked == null || model.allocPoint == null) return '—';
-      if (BigInt(model.totalStaked) > 0n && BigInt(model.allocPoint) > 0n) {
-        daily += perSecond * 86400n * BigInt(model.allocPoint) / totalAlloc;
+      if (model.error) return { value: '—', foot: 'Could not read every configured pool' };
+      if (model.totalStaked == null || model.allocPoint == null) {
+        return { value: 'Loading…', foot: 'Reading live pool balances' };
+      }
+      var allocPoint = BigInt(model.allocPoint);
+      if (BigInt(model.totalStaked) > 0n && allocPoint > 0n) {
+        activeCount++;
+        activeAlloc += allocPoint;
       }
     }
-    if (state.stats.supply != null && state.stats.cap != null) {
-      var supply = BigInt(state.stats.supply);
-      var cap = BigInt(state.stats.cap);
-      var remaining = cap > supply ? cap - supply : 0n;
-      if (daily > remaining) daily = remaining;
-    }
-    return units(daily, 18, 2) + ' FORGE / day';
+    if (activeAlloc > totalAlloc) return { value: '—', foot: 'Live pool allocation data is inconsistent' };
+    var percentage = totalAlloc === 0n ? 0 : Number(activeAlloc * 10000n / totalAlloc) / 100;
+    return {
+      value: activeCount + ' / ' + farms.length,
+      foot: comma(percentage, 2) + '% of total FORGE allocation is in pools with stakers'
+    };
   }
 
   function renderHome() {
@@ -362,6 +366,7 @@
     var count = allFarms().length;
     var tvl = homeTvl();
     var marketCap = homeMarketCap();
+    var activePools = activeRewardPools();
     var positions = Object.keys(state.data).map(function (key) { return state.data[key]; }).filter(function (m) { return m && m.kind === 'farm' && m.userAmount > 0n; }).slice(0, 4);
     var positionHtml = '';
     if (state.account) {
@@ -378,7 +383,7 @@
       '<section class="stat-grid" aria-label="Protocol statistics">' +
       statCard('Total value staked (TVL)', tvl.value, tvl.foot) +
       statCard('FORGE market cap', marketCap.value, marketCap.foot) +
-      statCard('Earn up to', dailyStakerRewards(), 'Estimated daily rewards across pools that currently have stakers') +
+      statCard('Active reward pools', activePools.value, activePools.foot) +
       statCard('FORGE supply', supplyValue + (stats.supply != null ? ' / ' + capValue : ''), capFoot) +
       statCard('Configured pools', String(count), state.rpcReady ? 'Verified against the current deployment' : 'Pool list from public configuration') +
       statCard('Emission pace', emission, 'Protocol rate · distributed by pool weight') +
