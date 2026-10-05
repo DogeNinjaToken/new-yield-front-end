@@ -44,6 +44,67 @@ async function render(pathname) {
   return app.innerHTML;
 }
 
+async function testWalletPersistsAcrossNavigation() {
+  const app = { innerHTML: '', addEventListener() {} };
+  const modal = { innerHTML: '', addEventListener() {} };
+  const nodes = { app, 'modal-root': modal, 'toast-root': { replaceChildren() {} } };
+  const document = { getElementById: id => nodes[id] || null, addEventListener() {}, hidden: false };
+  const location = { pathname: '/' };
+  const listeners = {};
+  const window = {
+    ROBINHOOD_FARM: config,
+    ethers: {},
+    location,
+    history: { pushState(_state, _title, path) { location.pathname = path; } },
+    setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 0; },
+    scrollTo() {}, addEventListener(name, listener) { listeners[name] = listener; }, dispatchEvent() {}
+  };
+  const exposedSource = source.replace(
+    "  root.addEventListener('click', handleRootClick);",
+    "  window.__navigationTest = { state: state, handleRootClick: handleRootClick };\n  root.addEventListener('click', handleRootClick);"
+  );
+  assert.notEqual(exposedSource, source, 'navigation test hook should be installed');
+  const context = { window, document, console, BigInt, Set, Number, String, Array, Object, Math, Intl, Promise, URL };
+  vm.createContext(context);
+  vm.runInContext(exposedSource, context);
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const state = window.__navigationTest.state;
+  const provider = { connected: true };
+  const signer = { connected: true };
+  state.account = '0x1234567890abcdef1234567890abcdef12345678';
+  state.injected = provider;
+  state.signer = signer;
+
+  function clickInternalLink(path) {
+    let prevented = false;
+    const link = { getAttribute(name) { return name === 'href' ? path : null; } };
+    window.__navigationTest.handleRootClick({
+      target: { closest(selector) { return selector === 'a[href]' ? link : null; } },
+      button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+      preventDefault() { prevented = true; }
+    });
+    assert.equal(prevented, true, `internal navigation to ${path} should avoid a document reload`);
+  }
+
+  clickInternalLink('/memes/');
+  assert.equal(location.pathname, '/memes/');
+  assert.equal(state.route, 'memes');
+  assert.equal(state.account, '0x1234567890abcdef1234567890abcdef12345678');
+  assert.equal(state.injected, provider);
+  assert.equal(state.signer, signer);
+  assert.match(app.innerHTML, /wallet-button connected/);
+  assert.match(app.innerHTML, /href="\/memes\/" aria-current="page"/);
+
+  location.pathname = '/pools/';
+  listeners.popstate();
+  assert.equal(state.route, 'pools', 'browser back/forward should update the rendered route');
+  assert.equal(state.account, '0x1234567890abcdef1234567890abcdef12345678', 'history navigation should preserve the connected wallet');
+  assert.equal(state.injected, provider);
+  assert.equal(state.signer, signer);
+  console.log('PASS client-side navigation and browser history preserve the connected wallet');
+}
+
 async function testLiveHomeMetrics() {
   const forgeAddress = '0x3333333333333333333333333333333333333333';
   const assetAddress = '0x4444444444444444444444444444444444444444';
@@ -158,6 +219,7 @@ async function testLiveHomeMetrics() {
   assert.match(memes, /Add your meme token here/);
   assert.doesNotMatch(home, /href="\/staking\/"|>Vaults</);
   console.log('PASS token, stock and meme routes separate pool categories and show the prefilled meme-request email');
+  await testWalletPersistsAcrossNavigation();
   await testLiveHomeMetrics();
 })().catch(error => {
   console.error(error);

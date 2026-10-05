@@ -44,12 +44,43 @@
     query: '', modal: null, startupWarning: '', refreshTimer: null
   };
 
-  function routeFromPath() {
-    var p = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
+  function routeFromPath(path) {
+    var p = (path || window.location.pathname || '/').replace(/\/+$/, '') || '/';
     if (p === '/stocks' || p === '/farms') return 'stocks';
     if (p === '/pools') return 'pools';
     if (p === '/memes' || p === '/staking' || p === '/vaults') return 'memes';
     return 'home';
+  }
+
+  function appPath(path) {
+    var normalized = String(path || '/').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+    return ['/', '/pools', '/stocks', '/farms', '/memes', '/staking', '/vaults'].indexOf(normalized) >= 0;
+  }
+
+  function canonicalAppPath(path) {
+    var normalized = String(path || '/').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+    return normalized === '/' ? '/' : normalized + '/';
+  }
+
+  function navigateTo(path, fromHistory) {
+    if (!appPath(path)) return false;
+    var target = canonicalAppPath(path);
+    if (!fromHistory && window.history && typeof window.history.pushState === 'function') {
+      var current = canonicalAppPath(window.location.pathname || '/');
+      if (target !== current) window.history.pushState({}, '', target);
+    }
+    state.route = routeFromPath(target);
+    state.query = '';
+    state.loading = false;
+    if (state.modal) { state.modal = null; drawModal(); }
+    render();
+    if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
+    refreshVisibleData().catch(function (error) { console.error('YieldForge page data refresh:', error); });
+    return true;
+  }
+
+  function handlePopState() {
+    navigateTo(window.location.pathname || '/', true);
   }
 
   function esc(value) {
@@ -800,7 +831,18 @@
   }
 
   function handleRootClick(event) {
-    var button = event.target.closest('[data-action]');
+    var target = event.target;
+    var link = target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
+    if (link && (event.button == null || event.button === 0) && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && link.getAttribute('target') !== '_blank') {
+      var href = link.getAttribute('href') || '';
+      var path = href.split(/[?#]/)[0];
+      if (path && appPath(path)) {
+        event.preventDefault();
+        navigateTo(path, false);
+        return;
+      }
+    }
+    var button = target && typeof target.closest === 'function' ? target.closest('[data-action]') : null;
     if (!button) return;
     var action = button.getAttribute('data-action');
     if (action === 'connect') {
@@ -864,6 +906,7 @@
 
   root.addEventListener('click', handleRootClick);
   root.addEventListener('input', handleInput);
+  window.addEventListener('popstate', handlePopState);
   modalRoot.addEventListener('click', handleModalClick);
   modalRoot.addEventListener('input', handleInput);
   document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && state.modal) { state.modal = null; drawModal(); } });
