@@ -29,6 +29,13 @@ window.ROBINHOOD_FARM = {
       "name": "Tesla",
       "decimals": 18,
       "assetType": "stock"
+    },
+    "pepe": {
+      "address": "0xCE02F52672db91ED71352a5ae881bd18da405895",
+      "symbol": "PEPE",
+      "name": "PEPE",
+      "decimals": 18,
+      "assetType": "meme"
     }
   },
   "pricePairs": [],
@@ -58,6 +65,16 @@ window.ROBINHOOD_FARM = {
       "label": "TSLA",
       "token": "tsla",
       "quoteToken": "tsla",
+      "isTokenOnly": true,
+      "stakeAddress": "",
+      "depositFeeBP": 250,
+      "allocPoint": 100
+    },
+    {
+      "pid": 3,
+      "label": "PEPE",
+      "token": "pepe",
+      "quoteToken": "pepe",
       "isTokenOnly": true,
       "stakeAddress": "",
       "depositFeeBP": 250,
