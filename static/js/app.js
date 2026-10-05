@@ -22,6 +22,7 @@
     'function pendingForge(uint256 pid,address user) view returns (uint256)',
     'function poolInfo(uint256 pid) view returns (address stakeToken,uint256 allocPoint,uint256 lastRewardTimestamp,uint256 accForgePerShare,uint16 depositFeeBP,uint256 totalStaked)',
     'function poolLength() view returns (uint256)',
+    'function startTimestamp() view returns (uint256)',
     'function totalAllocPoint() view returns (uint256)',
     'function userInfo(uint256 pid,address user) view returns (uint256 amount,uint256 rewardDebt)',
     'function deposit(uint256 pid,uint256 amount)',
@@ -36,13 +37,18 @@
     'function userInfo(address user) view returns (uint256 amount,uint256 rewardDebt)',
     'function withdraw(uint256 amount)'
   ];
+  var PRICE_PAIR_ABI = [
+    'function token0() view returns (address)',
+    'function token1() view returns (address)',
+    'function getReserves() view returns (uint112 reserve0,uint112 reserve1,uint32 blockTimestampLast)'
+  ];
 
   var root = document.getElementById('app');
   var modalRoot = document.getElementById('modal-root');
   var toastRoot = document.getElementById('toast-root');
   var state = {
     route: routeFromPath(), rpc: null, chef: null, forge: null,
-    rpcReady: false, rpcError: '', stats: null, account: '',
+    rpcReady: false, rpcError: '', stats: null, usdPrices: {}, account: '',
     injected: null, signer: null, data: {}, loading: false,
     query: '', modal: null, startupWarning: '', refreshTimer: null
   };
@@ -94,6 +100,12 @@
 
   function allFarms() {
     return Array.isArray(C.farms) ? C.farms.filter(validFarm) : [];
+  }
+
+  function configuredVaults() {
+    return Array.isArray(C.vaults) ? C.vaults.filter(function (v) {
+      return address(configuredAddress(v.address)) && (C.tokens || {})[v.stakingToken] && (C.tokens || {})[v.earningToken];
+    }) : [];
   }
 
   function visibleFarms() {
@@ -194,6 +206,153 @@
     return '<div class="stat-card"><div class="stat-label">' + esc(label) + '</div><div class="stat-value">' + esc(value) + '</div><div class="stat-foot">' + esc(foot || '') + '</div></div>';
   }
 
+  function positivePrice(value) {
+    var number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : null;
+  }
+
+  function formatUsd(value) {
+    if (!Number.isFinite(value) || value < 0) return '—';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  }
+
+  function tokenKeyForAddress(value) {
+    var target = address(value);
+    if (!target) return '';
+    var tokens = C.tokens || {};
+    var keys = Object.keys(tokens);
+    for (var i = 0; i < keys.length; i++) {
+      var tokenAddress = configuredAddress(tokens[keys[i]].address);
+      if (tokenAddress && tokenAddress.toLowerCase() === target.toLowerCase()) return keys[i];
+    }
+    return configuredAddress(C.tokenAddress) && configuredAddress(C.tokenAddress).toLowerCase() === target.toLowerCase() ? 'forge' : '';
+  }
+
+  function tokenDecimals(key, tokenAddress) {
+    var meta = metaToken((C.tokens || {})[key], key);
+    if (meta.decimals != null) return Promise.resolve(meta.decimals);
+    var farms = allFarms();
+    for (var i = 0; i < farms.length; i++) {
+      if (tokenKey(farms[i]) === key) {
+        var farmData = state.data['farm:' + Number(farms[i].pid)];
+        if (farmData && Number.isInteger(farmData.decimals)) return Promise.resolve(farmData.decimals);
+      }
+    }
+    var vaults = configuredVaults();
+    for (var j = 0; j < vaults.length; j++) {
+      if (vaults[j].stakingToken === key) {
+        var vaultData = state.data['vault:' + String(vaults[j].sousId || vaults[j].address || '')];
+        if (vaultData && Number.isInteger(vaultData.decimals)) return Promise.resolve(vaultData.decimals);
+      }
+    }
+    if (!address(tokenAddress)) return Promise.resolve(null);
+    return new E.Contract(tokenAddress, ERC20_ABI, state.rpc).decimals().then(function (value) {
+      var decimals = Number(value);
+      return Number.isInteger(decimals) && decimals >= 0 && decimals <= 36 ? decimals : null;
+    }).catch(function () { return null; });
+  }
+
+  async function readPricePair(pairConfig) {
+    var pairAddress = typeof pairConfig === 'string' ? address(pairConfig) : configuredAddress(pairConfig && (pairConfig.address || pairConfig.pairAddress || pairConfig.pair));
+    if (!pairAddress) return null;
+    try {
+      var pair = new E.Contract(pairAddress, PRICE_PAIR_ABI, state.rpc);
+      var values = await Promise.all([pair.token0(), pair.token1(), pair.getReserves()]);
+      var key0 = tokenKeyForAddress(values[0]);
+      var key1 = tokenKeyForAddress(values[1]);
+      if (!key0 || !key1 || key0 === key1) return null;
+      var decimals = await Promise.all([tokenDecimals(key0, values[0]), tokenDecimals(key1, values[1])]);
+      if (decimals[0] == null || decimals[1] == null) return null;
+      return { key0: key0, key1: key1, decimals0: decimals[0], decimals1: decimals[1], reserve0: values[2][0], reserve1: values[2][1] };
+    } catch (_) { return null; }
+  }
+
+  async function refreshUsdPrices() {
+    var prices = {};
+    var tokens = C.tokens || {};
+    Object.keys(tokens).forEach(function (key) {
+      var price = positivePrice(tokens[key] && tokens[key].priceUsd);
+      if (price != null) prices[key] = price;
+    });
+    var pairConfigs = Array.isArray(C.pricePairs) ? C.pricePairs : [];
+    var pairs = await Promise.all(pairConfigs.map(readPricePair));
+    pairs = pairs.filter(Boolean);
+    for (var pass = 0; pass < pairs.length; pass++) {
+      var changed = false;
+      pairs.forEach(function (pair) {
+        var price0 = positivePrice(prices[pair.key0]);
+        var price1 = positivePrice(prices[pair.key1]);
+        var reserve0 = Number(E.formatUnits(pair.reserve0, pair.decimals0));
+        var reserve1 = Number(E.formatUnits(pair.reserve1, pair.decimals1));
+        if (!(reserve0 > 0) || !(reserve1 > 0) || !Number.isFinite(reserve0) || !Number.isFinite(reserve1)) return;
+        if (price0 != null && price1 == null) {
+          var derived1 = price0 * reserve0 / reserve1;
+          if (Number.isFinite(derived1) && derived1 > 0) { prices[pair.key1] = derived1; changed = true; }
+        } else if (price1 != null && price0 == null) {
+          var derived0 = price1 * reserve1 / reserve0;
+          if (Number.isFinite(derived0) && derived0 > 0) { prices[pair.key0] = derived0; changed = true; }
+        }
+      });
+      if (!changed) break;
+    }
+    state.usdPrices = prices;
+  }
+
+  function homeTvl() {
+    if (Number(C.chainId) === 46630) return { value: 'Testnet', foot: 'Test tokens have no monetary value' };
+    if (!state.rpcReady) return { value: '—', foot: 'Waiting for live pool data' };
+    var models = allFarms().map(poolModel).concat(configuredVaults().map(vaultModel));
+    var totalUsd = 0;
+    for (var i = 0; i < models.length; i++) {
+      var model = models[i];
+      if (model.error) return { value: '—', foot: 'Could not read every configured staking balance' };
+      if (model.totalStaked == null) return { value: 'Loading…', foot: 'Reading live pool balances' };
+      var amount = Number(E.formatUnits(model.totalStaked, model.decimals));
+      if (!Number.isFinite(amount)) return { value: '—', foot: 'A pool balance could not be valued' };
+      if (amount === 0) continue;
+      var price = positivePrice(state.usdPrices[model.key]);
+      if (price == null) return { value: 'Needs prices', foot: 'Configure USD prices for all staked assets' };
+      totalUsd += amount * price;
+      if (!Number.isFinite(totalUsd)) return { value: '—', foot: 'Estimated value is outside the display range' };
+    }
+    return { value: formatUsd(totalUsd), foot: 'Across configured pools and vaults · estimated USD value' };
+  }
+
+  function homeMarketCap() {
+    if (Number(C.chainId) === 46630) return { value: 'Testnet', foot: 'Test tokens have no monetary value' };
+    if (!state.stats || state.stats.supply == null) return { value: '—', foot: 'Waiting for FORGE supply data' };
+    var forgeKey = tokenKeyForAddress(C.tokenAddress) || 'forge';
+    var price = positivePrice(state.usdPrices[forgeKey]);
+    if (price == null) return { value: 'Needs price', foot: 'Configure a FORGE USD price or price pair' };
+    var supply = Number(E.formatUnits(state.stats.supply, 18));
+    return { value: formatUsd(supply * price), foot: 'Total FORGE supply × estimated spot price' };
+  }
+
+  function dailyStakerRewards() {
+    if (!state.rpcReady || !state.stats || state.stats.perSec == null || state.stats.totalAllocPoint == null) return '—';
+    var farms = allFarms();
+    if (!farms.length) return '0 FORGE / day';
+    var totalAlloc = BigInt(state.stats.totalAllocPoint);
+    var perSecond = BigInt(state.stats.perSec);
+    if (totalAlloc === 0n || perSecond === 0n) return '0 FORGE / day';
+    if (state.stats.startTimestamp != null && Number(state.stats.startTimestamp) > Math.floor(Date.now() / 1000)) return '0 FORGE / day';
+    var daily = 0n;
+    for (var i = 0; i < farms.length; i++) {
+      var model = poolModel(farms[i]);
+      if (model.error || model.totalStaked == null || model.allocPoint == null) return '—';
+      if (BigInt(model.totalStaked) > 0n && BigInt(model.allocPoint) > 0n) {
+        daily += perSecond * 86400n * BigInt(model.allocPoint) / totalAlloc;
+      }
+    }
+    if (state.stats.supply != null && state.stats.cap != null) {
+      var supply = BigInt(state.stats.supply);
+      var cap = BigInt(state.stats.cap);
+      var remaining = cap > supply ? cap - supply : 0n;
+      if (daily > remaining) daily = remaining;
+    }
+    return units(daily, 18, 2) + ' FORGE / day';
+  }
+
   function renderHome() {
     var stats = state.stats || {};
     var supplyValue = stats.supply == null ? '—' : units(stats.supply, 18, 2);
@@ -201,6 +360,8 @@
     var capFoot = stats.supply == null || stats.cap == null ? 'Live supply and cap' : comma(Number(E.formatUnits(stats.supply, 18)) / Math.max(Number(E.formatUnits(stats.cap, 18)), 1) * 100, 1) + '% of current cap';
     var emission = stats.perDay == null ? '—' : units(stats.perDay, 18, 2) + ' FORGE';
     var count = allFarms().length;
+    var tvl = homeTvl();
+    var marketCap = homeMarketCap();
     var positions = Object.keys(state.data).map(function (key) { return state.data[key]; }).filter(function (m) { return m && m.kind === 'farm' && m.userAmount > 0n; }).slice(0, 4);
     var positionHtml = '';
     if (state.account) {
@@ -215,6 +376,9 @@
     return '<main class="page">' + testnetStrip() + stateNotice() +
       '<section class="hero"><div class="hero-inner"><div><div class="eyebrow">Robinhood Chain · YieldForge</div><h1>Put your tokens<br><span>to work.</span></h1><p class="hero-copy">A focused staking experience for the YieldForge protocol. Stake supported tokens, track your position and claim FORGE rewards from one place.</p><div class="hero-actions"><a class="button" href="/pools/">Explore token pools <span aria-hidden="true">↗</span></a><a class="button secondary" href="/stocks/">View stock pools</a></div></div><img class="hero-emblem" src="/images/tokens/forge.png" alt="YieldForge forge emblem"></div></section>' +
       '<section class="stat-grid" aria-label="Protocol statistics">' +
+      statCard('Total value staked (TVL)', tvl.value, tvl.foot) +
+      statCard('FORGE market cap', marketCap.value, marketCap.foot) +
+      statCard('Earn up to', dailyStakerRewards(), 'Estimated daily rewards across pools that currently have stakers') +
       statCard('FORGE supply', supplyValue + (stats.supply != null ? ' / ' + capValue : ''), capFoot) +
       statCard('Configured pools', String(count), state.rpcReady ? 'Verified against the current deployment' : 'Pool list from public configuration') +
       statCard('Emission pace', emission, 'Protocol rate · distributed by pool weight') +
@@ -317,7 +481,7 @@
   }
 
   function vaultPage() {
-    var vaults = Array.isArray(C.vaults) ? C.vaults.filter(function (v) { return address(configuredAddress(v.address)) && (C.tokens || {})[v.stakingToken] && (C.tokens || {})[v.earningToken]; }) : [];
+    var vaults = configuredVaults();
     var hasVaults = vaults.length > 0;
     var list = vaults.map(vaultModel).filter(function (m) {
       if (!state.query) return true;
@@ -431,7 +595,7 @@
   }
 
   function farmConfigsForCurrentView() {
-    if (state.route === 'home') return state.account ? allFarms() : [];
+    if (state.route === 'home') return allFarms();
     if (state.route === 'stocks' || state.route === 'pools') return visibleFarms();
     return [];
   }
@@ -455,19 +619,15 @@
       var stakeAddress = meta.address;
       if (!stakeAddress) throw new Error('Token contract address is missing.');
       var contract = new E.Contract(stakeAddress, ERC20_ABI, state.rpc);
-      var liveValues = await Promise.all([
-        state.chef.poolInfo(Number(farm.pid)),
-        state.chef.forgePerSec(),
-        state.chef.totalAllocPoint()
-      ]);
-      var info = liveValues[0];
+      var info = await state.chef.poolInfo(Number(farm.pid));
       if (String(info[0]).toLowerCase() !== stakeAddress.toLowerCase()) throw new Error('Stake-token address differs from the deployed pool.');
       var fee = Number(info[4]);
       if (farm.depositFeeBP != null && fee !== Number(farm.depositFeeBP)) throw new Error('Deposit fee differs from the public configuration.');
       var decimals = meta.decimals;
       if (decimals == null || !Number.isInteger(decimals) || decimals < 0 || decimals > 36) decimals = Number(await contract.decimals());
       var model = { kind: 'farm', id: id, key: key, farm: farm, token: meta, decimals: decimals,
-        totalStaked: info[5], allocPoint: info[1], forgePerSec: liveValues[1], totalAllocPoint: liveValues[2],
+        totalStaked: info[5], allocPoint: info[1], forgePerSec: state.stats && state.stats.perSec,
+        totalAllocPoint: state.stats && state.stats.totalAllocPoint,
         fee: fee, userAmount: 0n, pending: 0n, balance: 0n, allowance: 0n };
       if (state.account) {
         var results = await Promise.all([
@@ -511,11 +671,12 @@
   async function refreshVisibleData() {
     if (!state.rpcReady || !C.enabled) return;
     var farms = farmConfigsForCurrentView();
-    var vaults = state.route === 'vaults' && Array.isArray(C.vaults) ? C.vaults.filter(function (v) { return address(configuredAddress(v.address)) && (C.tokens || {})[v.stakingToken] && (C.tokens || {})[v.earningToken]; }) : [];
-    if (!farms.length && !vaults.length) { render(); return; }
+    var vaults = (state.route === 'vaults' || state.route === 'home') ? configuredVaults() : [];
+    if (!farms.length && !vaults.length && state.route !== 'home') { render(); return; }
     state.loading = true; render();
     await mapLimit(farms, 4, loadFarm);
     await mapLimit(vaults, 3, loadVault);
+    if (state.route === 'home') await refreshUsdPrices();
     state.loading = false; render();
     if (state.modal) drawModal();
   }
@@ -534,7 +695,7 @@
     if (Number(network.chainId) !== Number(C.chainId)) throw new Error('The configured RPC returned a different chain ID.');
     var code = await Promise.all([state.rpc.getCode(tokenAddress), state.rpc.getCode(chefAddress)]);
     if (code[0] === '0x' || code[1] === '0x') throw new Error('No Forge or MasterChef contract was found at the configured address.');
-    var checks = await Promise.all([state.forge.owner(), state.chef.forge(), state.chef.poolLength(), state.chef.maxSupply(), state.chef.forgePerSec(), state.forge.totalSupply()]);
+    var checks = await Promise.all([state.forge.owner(), state.chef.forge(), state.chef.poolLength(), state.chef.maxSupply(), state.chef.forgePerSec(), state.forge.totalSupply(), state.chef.totalAllocPoint(), state.chef.startTimestamp()]);
     if (String(checks[0]).toLowerCase() !== chefAddress.toLowerCase()) throw new Error('FORGE ownership has not been transferred to the configured MasterChef contract.');
     if (String(checks[1]).toLowerCase() !== tokenAddress.toLowerCase()) throw new Error('MasterChef is configured with a different FORGE token.');
     var farms = allFarms();
@@ -546,7 +707,7 @@
       if (pidSet.has(Number(f.pid)) || Number(f.pid) >= length) throw new Error('Configured pool IDs do not match the deployed MasterChef pool count.');
       pidSet.add(Number(f.pid));
     }
-    state.stats = { supply: checks[5], cap: checks[3], perDay: checks[4] * 86400n };
+    state.stats = { supply: checks[5], cap: checks[3], perSec: checks[4], perDay: checks[4] * 86400n, totalAllocPoint: checks[6], startTimestamp: checks[7] };
     state.rpcReady = true;
     state.rpcError = '';
     state.startupWarning = '';
@@ -756,8 +917,8 @@
       if (state.refreshTimer) window.clearInterval(state.refreshTimer);
       state.refreshTimer = window.setInterval(function () {
         if (!document.hidden && state.rpcReady) {
-          Promise.all([state.forge.totalSupply(), state.chef.maxSupply(), state.chef.forgePerSec()]).then(function (values) {
-            state.stats = { supply: values[0], cap: values[1], perDay: values[2] * 86400n }; render();
+          Promise.all([state.forge.totalSupply(), state.chef.maxSupply(), state.chef.forgePerSec(), state.chef.totalAllocPoint(), state.chef.startTimestamp()]).then(function (values) {
+            state.stats = { supply: values[0], cap: values[1], perSec: values[2], perDay: values[2] * 86400n, totalAllocPoint: values[3], startTimestamp: values[4] }; render();
           }).catch(function () {});
           refreshVisibleData();
         }
