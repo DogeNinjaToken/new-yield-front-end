@@ -1,0 +1,10 @@
+{
+  "headers": [
+    {
+      "source": "/static/js/robinhood-config.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+      ]
+    }
+  ]
+}
